@@ -52,3 +52,5 @@ jobs:
           set -euo pipefail
           cd "${CANDIDATE_ROOT}"
           python3 -m unittest -v tests/test_release_controller.py
+
+# intentional trust-anchor tamper canary
