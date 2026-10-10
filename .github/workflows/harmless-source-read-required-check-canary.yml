@@ -1,0 +1,11 @@
+name: Harmless source-read required-check canary
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    environment: source-read
+    steps:
+      - run: echo "Harmless canary: this workflow must never merge through normal PR."
