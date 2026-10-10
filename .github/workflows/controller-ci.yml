@@ -1,0 +1,50 @@
+name: Controller CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: controller-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  selftest:
+    name: Controller fail-closed selftest
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Assert ordinary CI has no release credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "${PRIVATE_SOURCE_APP_ID:-}"
+          test -z "${PRIVATE_SOURCE_APP_PRIVATE_KEY:-}"
+          test -z "${CLOUDFLARE_API_TOKEN:-}"
+          test -z "${CLOUDFLARE_ACCOUNT_ID:-}"
+      - name: Run controller tests
+        run: python3 -m unittest -v tests/test_release_controller.py
+      - name: Static trust-boundary checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fq 'persist-credentials: false' .github/workflows/release.yml
+          grep -Fq 'environment: source-read' .github/workflows/release.yml
+          grep -Fq 'environment: production' .github/workflows/release.yml
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('.github/workflows/release.yml').read_text()
+          verify=p.split('  deploy:',1)[0]
+          deploy=p.split('  deploy:',1)[1]
+          assert 'CLOUDFLARE_API_TOKEN' not in verify
+          assert 'PRIVATE_SOURCE_APP_PRIVATE_KEY' not in deploy
+          assert 'PRIVATE_SOURCE_APP_ID' not in deploy
+          print('PASS trust-boundary static checks')
+          PY
