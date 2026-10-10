@@ -1,0 +1,72 @@
+name: Controller Workflow Surface Gate
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: controller-workflow-surface-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  workflow-surface:
+    name: Controller workflow surface gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout trusted base
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Download exact candidate without credentials
+        shell: bash
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          set -euo pipefail
+          test "${PR_HEAD_REPO}" = "${GITHUB_REPOSITORY}"
+          [[ "${PR_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          mkdir -p /tmp/controller-candidate
+          curl --fail --silent --show-error --location             "https://github.com/${GITHUB_REPOSITORY}/archive/${PR_HEAD_SHA}.tar.gz"             --output /tmp/controller-candidate.tar.gz
+          tar -xzf /tmp/controller-candidate.tar.gz -C /tmp/controller-candidate --strip-components=1
+
+      - name: Block any workflow-surface mutation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, sys
+
+          base = Path(".github/workflows")
+          cand = Path("/tmp/controller-candidate/.github/workflows")
+
+          def snap(root):
+              out={}
+              if not root.exists():
+                  return out
+              for p in sorted(root.rglob("*")):
+                  if p.is_file():
+                      rel=p.relative_to(root).as_posix()
+                      out[rel]=hashlib.sha256(p.read_bytes()).hexdigest()
+              return out
+
+          a=snap(base)
+          b=snap(cand)
+          if a != b:
+              added=sorted(set(b)-set(a))
+              removed=sorted(set(a)-set(b))
+              changed=sorted(k for k in set(a)&set(b) if a[k]!=b[k])
+              print("BLOCKED: normal PR may not mutate .github/workflows/**")
+              if added: print("added:", ", ".join(added))
+              if removed: print("removed:", ", ".join(removed))
+              if changed: print("changed:", ", ".join(changed))
+              sys.exit(1)
+          print("PASS: workflow surface unchanged")
+          PY
