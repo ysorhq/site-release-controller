@@ -41,8 +41,9 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           p=Path('.github/workflows/release.yml').read_text()
-          verify=p.split('  deploy:',1)[0]
-          deploy=p.split('  deploy:',1)[1]
+          marker='\n  deploy:\n'
+          assert marker in p
+          verify,deploy=p.split(marker,1)
           assert 'CLOUDFLARE_API_TOKEN' not in verify
           assert 'PRIVATE_SOURCE_APP_PRIVATE_KEY' not in deploy
           assert 'PRIVATE_SOURCE_APP_ID' not in deploy
