@@ -56,11 +56,22 @@ jobs:
           test -f "${REQUEST_PATH}"
           python3 controller/release_controller.py verify-request --request "${REQUEST_PATH}" --head "${SOURCE_SHA}" --tree "${SOURCE_TREE}"
 
+      - name: Assert source-read environment configuration
+        shell: bash
+        env:
+          PRIVATE_SOURCE_APP_ID: ${{ vars.PRIVATE_SOURCE_APP_ID }}
+          WEBMCP_ORIGIN_TRIAL_TOKEN: ${{ vars.WEBMCP_ORIGIN_TRIAL_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "${PRIVATE_SOURCE_APP_ID}"
+          test -n "${WEBMCP_ORIGIN_TRIAL_TOKEN}"
+          test -n "${{ secrets.PRIVATE_SOURCE_APP_PRIVATE_KEY }}"
+
       - name: Mint short-lived read-only private-source token
         id: source-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          app-id: ${{ secrets.PRIVATE_SOURCE_APP_ID }}
+          app-id: ${{ vars.PRIVATE_SOURCE_APP_ID }}
           private-key: ${{ secrets.PRIVATE_SOURCE_APP_PRIVATE_KEY }}
           owner: ewgenij87snwork
           repositories: yevgeniy-sorokin
@@ -106,7 +117,7 @@ jobs:
       - name: Independent source and SSG verification
         working-directory: source
         env:
-          WEBMCP_ORIGIN_TRIAL_TOKEN: ${{ secrets.WEBMCP_ORIGIN_TRIAL_TOKEN }}
+          WEBMCP_ORIGIN_TRIAL_TOKEN: ${{ vars.WEBMCP_ORIGIN_TRIAL_TOKEN }}
         run: |
           node scripts/compile-semantic.mjs --check
           node scripts/validate-semantic-contract.mjs
