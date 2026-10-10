@@ -1,0 +1,65 @@
+name: Source-read App canary
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/source-read-canary.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-read-canary:
+    name: Source-read private repo canary
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: source-read
+    steps:
+      - name: Checkout trusted controller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Assert source-read configuration is present
+        shell: bash
+        env:
+          PRIVATE_SOURCE_APP_ID: ${{ vars.PRIVATE_SOURCE_APP_ID }}
+          WEBMCP_ORIGIN_TRIAL_TOKEN: ${{ vars.WEBMCP_ORIGIN_TRIAL_TOKEN }}
+          PRIVATE_SOURCE_APP_PRIVATE_KEY: ${{ secrets.PRIVATE_SOURCE_APP_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "${PRIVATE_SOURCE_APP_ID}"
+          test -n "${WEBMCP_ORIGIN_TRIAL_TOKEN}"
+          test -n "${PRIVATE_SOURCE_APP_PRIVATE_KEY}"
+          echo "source-read environment configuration present"
+
+      - name: Mint short-lived source-reader token
+        id: source-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.PRIVATE_SOURCE_APP_ID }}
+          private-key: ${{ secrets.PRIVATE_SOURCE_APP_PRIVATE_KEY }}
+          owner: ewgenij87snwork
+          repositories: yevgeniy-sorokin
+          permission-contents: read
+
+      - name: Checkout exact private candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ewgenij87snwork/yevgeniy-sorokin
+          ref: d2884d36fb1b488ac8d7e171fe4bcb8238c5d9dd
+          token: ${{ steps.source-token.outputs.token }}
+          persist-credentials: false
+          fetch-depth: 1
+          path: private-source
+
+      - name: Verify exact private identity without exposing source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C private-source rev-parse HEAD)" = "d2884d36fb1b488ac8d7e171fe4bcb8238c5d9dd"
+          test "$(git -C private-source rev-parse 'HEAD^{tree}')" = "ed30d5a3528c8c37521febcc2e05a5f987ee414c"
+          git -C private-source remote remove origin || true
+          echo "PASS exact private source-read canary"
