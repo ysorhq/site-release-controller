@@ -96,3 +96,5 @@ with tempfile.TemporaryDirectory() as td:
     expect_fail("forbidden artifact",lambda:rc.validate_public_artifact(site))
 
 print("PASS: trusted controller gate")
+
+# intentional ruleset canary tamper
