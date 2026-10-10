@@ -49,4 +49,4 @@ class ControllerTests(unittest.TestCase):
         rc.write_manifest(r,self.site,out); (self.site/"index.html").write_text("tampered")
         with self.assertRaisesRegex(ValueError,"digest"): rc.verify_manifest(out,self.site,HEAD)
 
-if __name__=="__main__": unittest.main(verbosity=2)
+class IntentionalProviderCanary(unittest.TestCase):\n    def test_intentional_red(self): self.fail("intentional provider gate canary")\n\nif __name__=="__main__": unittest.main(verbosity=2)
