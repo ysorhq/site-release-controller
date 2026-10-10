@@ -1,0 +1,11 @@
+name: Harmless source-read surface canary
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    environment: source-read
+    steps:
+      - run: echo "If this workflow could merge normally, an added workflow could request source-read credentials."
