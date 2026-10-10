@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "source_repo": "ewgenij87snwork/yevgeniy-sorokin",
+  "source_head": "d2884d36fb1b488ac8d7e171fe4bcb8238c5d9dd",
+  "source_tree": "ed30d5a3528c8c37521febcc2e05a5f987ee414c",
+  "gpt_cloud": {
+    "status": "PASS",
+    "receipt_sha256": "62727b873e8b2685b13b818f02ba6fc007e0d4f457608b8fd8882753db316909",
+    "finished_at_epoch": 0,
+    "max_age_seconds": 14400,
+    "gates": {
+      "dependency_security": "PASS",
+      "ssg": "PASS",
+      "typecheck": "PASS",
+      "unit": "PASS",
+      "packaged_contracts": "PASS",
+      "playwright": "62/62",
+      "lighthouse_mobile": "33/33",
+      "lighthouse_desktop": "33/33"
+    }
+  }
+}

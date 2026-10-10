@@ -1,0 +1,188 @@
+name: Release exact private candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      request_path:
+        description: Committed request JSON under requests/
+        required: true
+        type: string
+      source_sha:
+        description: Exact private source commit SHA
+        required: true
+        type: string
+      source_tree:
+        description: Exact private source tree SHA
+        required: true
+        type: string
+      deploy:
+        description: Deploy after independent verification
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-release
+  cancel-in-progress: false
+
+jobs:
+  verify-source:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    environment: source-read
+    outputs:
+      artifact_sha256: ${{ steps.manifest.outputs.artifact_sha256 }}
+    steps:
+      - name: Checkout trusted controller main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Validate immutable request inputs
+        shell: bash
+        env:
+          REQUEST_PATH: ${{ inputs.request_path }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          SOURCE_TREE: ${{ inputs.source_tree }}
+        run: |
+          set -euo pipefail
+          [[ "${REQUEST_PATH}" =~ ^requests/[A-Za-z0-9._-]+\.json$ ]]
+          [[ "${SOURCE_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${SOURCE_TREE}" =~ ^[0-9a-f]{40}$ ]]
+          test -f "${REQUEST_PATH}"
+          python3 controller/release_controller.py verify-request --request "${REQUEST_PATH}" --head "${SOURCE_SHA}" --tree "${SOURCE_TREE}"
+
+      - name: Mint short-lived read-only private-source token
+        id: source-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.PRIVATE_SOURCE_APP_ID }}
+          private-key: ${{ secrets.PRIVATE_SOURCE_APP_PRIVATE_KEY }}
+          owner: ewgenij87snwork
+          repositories: yevgeniy-sorokin
+          permission-contents: read
+
+      - name: Checkout exact private candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ewgenij87snwork/yevgeniy-sorokin
+          ref: ${{ inputs.source_sha }}
+          token: ${{ steps.source-token.outputs.token }}
+          persist-credentials: false
+          fetch-depth: 1
+          path: source
+
+      - name: Verify exact private Git identity
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          SOURCE_TREE: ${{ inputs.source_tree }}
+        run: |
+          set -euo pipefail
+          test "$(git -C source rev-parse HEAD)" = "${SOURCE_SHA}"
+          test "$(git -C source rev-parse 'HEAD^{tree}')" = "${SOURCE_TREE}"
+
+      - name: Use pinned Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "24.21.0"
+          package-manager-cache: false
+
+      - name: Install exact dependencies
+        working-directory: source
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Independent dependency and release-gate verification
+        working-directory: source
+        run: |
+          node scripts/verify-release-gates-selftest.mjs
+          node scripts/verify-release-gates.mjs
+          npm run audit:dependencies
+
+      - name: Independent source and SSG verification
+        working-directory: source
+        run: |
+          node scripts/compile-semantic.mjs --check
+          node scripts/validate-semantic-contract.mjs
+          npm run typecheck
+          npm test
+          node scripts/validate-knowledge.mjs
+          node scripts/validate-webmcp-runtime.mjs
+          bash scripts/prepare-site.sh
+          node scripts/apply-webmcp-origin-trial.mjs .site/_headers
+          node scripts/apply-public-security-headers-selftest.mjs
+          node scripts/apply-public-security-headers.mjs .site
+          CHECK_PACKAGED_SITE=1 node scripts/validate-knowledge.mjs
+          WEBMCP_TEST_ROOT=.site node scripts/validate-webmcp-runtime.mjs
+          node scripts/audit-public-quality.mjs .site
+          npm run audit:exposure
+          npm run audit:candidate-headers
+          npm run audit:security
+
+      - name: Install Chromium
+        working-directory: source
+        run: npx playwright install --with-deps chromium
+
+      - name: Independently rerun full browser and Lighthouse release suite
+        uses: ./source/.github/actions/site-quality-gates
+
+      - name: Build immutable public artifact manifest
+        id: manifest
+        shell: bash
+        env:
+          REQUEST_PATH: ${{ inputs.request_path }}
+        run: |
+          set -euo pipefail
+          python3 controller/release_controller.py write-manifest --request "${REQUEST_PATH}" --artifact source/.site --output source/release-controller-manifest.json
+          digest="$(python3 -c 'import json; print(json.load(open("source/release-controller-manifest.json"))["artifact_sha256"])')"
+          echo "artifact_sha256=${digest}" >> "${GITHUB_OUTPUT}"
+
+      - name: Upload verified public artifact only
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: verified-site-${{ inputs.source_sha }}
+          path: |
+            source/.site/
+            source/release-controller-manifest.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
+
+  deploy:
+    if: inputs.deploy == true
+    needs: verify-source
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    steps:
+      - name: Checkout trusted controller main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download independently verified artifact
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: verified-site-${{ inputs.source_sha }}
+          path: verified
+
+      - name: Re-verify artifact digest after job boundary
+        run: python3 controller/release_controller.py verify-deploy --manifest verified/release-controller-manifest.json --artifact verified/.site --head "${{ inputs.source_sha }}"
+
+      - name: Deploy exact verified static artifact
+        uses: cloudflare/wrangler-action@da0e0dfe58b7a431659754fdf3f186c529afbe65 # v3.14.1
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy verified/.site --project-name=yevgeniy-sorokin --branch=main --commit-hash=${{ inputs.source_sha }}
+
+      - name: Smoke production
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location https://yevgeniy-sorokin.pages.dev/ >/dev/null
+          test "$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' https://yevgeniy-sorokin.pages.dev/__release_controller_404_probe__)" = "404"
