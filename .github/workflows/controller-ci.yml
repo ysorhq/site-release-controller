@@ -1,7 +1,8 @@
 name: Controller CI
 
 on:
-  pull_request:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [main]
 
@@ -13,39 +14,41 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  selftest:
-    name: Controller fail-closed selftest
+  trust-gate:
+    name: Controller trust gate
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Checkout trusted base
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Assert ordinary CI has no release credentials
+
+      - name: Prepare exact candidate without credentials
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          set -euo pipefail
+          if [ "${EVENT_NAME}" = "pull_request_target" ]; then
+            test "${PR_HEAD_REPO}" = "${GITHUB_REPOSITORY}"
+            [[ "${PR_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]
+            mkdir -p /tmp/controller-candidate
+            curl --fail --silent --show-error --location               "https://github.com/${GITHUB_REPOSITORY}/archive/${PR_HEAD_SHA}.tar.gz"               --output /tmp/controller-candidate.tar.gz
+            tar -xzf /tmp/controller-candidate.tar.gz -C /tmp/controller-candidate --strip-components=1
+            echo "CANDIDATE_ROOT=/tmp/controller-candidate" >> "${GITHUB_ENV}"
+          else
+            echo "CANDIDATE_ROOT=${GITHUB_WORKSPACE}" >> "${GITHUB_ENV}"
+          fi
+
+      - name: Run immutable trusted gate against candidate
+        run: python3 tests/trusted_pr_gate.py "${CANDIDATE_ROOT}"
+
+      - name: Run candidate unit tests as supplemental evidence
         shell: bash
         run: |
           set -euo pipefail
-          test -z "${PRIVATE_SOURCE_APP_ID:-}"
-          test -z "${PRIVATE_SOURCE_APP_PRIVATE_KEY:-}"
-          test -z "${CLOUDFLARE_API_TOKEN:-}"
-          test -z "${CLOUDFLARE_ACCOUNT_ID:-}"
-      - name: Run controller tests
-        run: python3 -m unittest -v tests/test_release_controller.py
-      - name: Static trust-boundary checks
-        shell: bash
-        run: |
-          set -euo pipefail
-          grep -Fq 'persist-credentials: false' .github/workflows/release.yml
-          grep -Fq 'environment: source-read' .github/workflows/release.yml
-          grep -Fq 'environment: production' .github/workflows/release.yml
-          python3 - <<'PY'
-          from pathlib import Path
-          p=Path('.github/workflows/release.yml').read_text()
-          marker='\n  deploy:\n'
-          assert marker in p
-          verify,deploy=p.split(marker,1)
-          assert 'CLOUDFLARE_API_TOKEN' not in verify
-          assert 'PRIVATE_SOURCE_APP_PRIVATE_KEY' not in deploy
-          assert 'PRIVATE_SOURCE_APP_ID' not in deploy
-          print('PASS trust-boundary static checks')
-          PY
+          cd "${CANDIDATE_ROOT}"
+          python3 -m unittest -v tests/test_release_controller.py

@@ -105,6 +105,8 @@ jobs:
 
       - name: Independent source and SSG verification
         working-directory: source
+        env:
+          WEBMCP_ORIGIN_TRIAL_TOKEN: ${{ secrets.WEBMCP_ORIGIN_TRIAL_TOKEN }}
         run: |
           node scripts/compile-semantic.mjs --check
           node scripts/validate-semantic-contract.mjs
@@ -113,10 +115,11 @@ jobs:
           node scripts/validate-knowledge.mjs
           node scripts/validate-webmcp-runtime.mjs
           bash scripts/prepare-site.sh
+          test -n "${WEBMCP_ORIGIN_TRIAL_TOKEN:-}"
           node scripts/apply-webmcp-origin-trial.mjs .site/_headers
           node scripts/apply-public-security-headers-selftest.mjs
           node scripts/apply-public-security-headers.mjs .site
-          CHECK_PACKAGED_SITE=1 node scripts/validate-knowledge.mjs
+          CHECK_PACKAGED_SITE=1 WEBMCP_ORIGIN_TRIAL_TOKEN="${WEBMCP_ORIGIN_TRIAL_TOKEN}" node scripts/validate-knowledge.mjs
           WEBMCP_TEST_ROOT=.site node scripts/validate-webmcp-runtime.mjs
           node scripts/audit-public-quality.mjs .site
           npm run audit:exposure

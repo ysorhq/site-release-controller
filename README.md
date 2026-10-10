@@ -6,4 +6,4 @@ This public repository contains release-controller code and safe fixtures only. 
 
 Canonical architecture rationale is private ADR-0001 in `ewgenij87snwork/gpt-codex`.
 
-Current state: bootstrap only; production release enforcement is not active yet.
+Current state: controller core bootstrapped. Production enforcement remains blocked until the no-bypass main ruleset, source-read GitHub App credentials, production environment credentials, and Cloudflare-exclusive ingress are configured and proven.
