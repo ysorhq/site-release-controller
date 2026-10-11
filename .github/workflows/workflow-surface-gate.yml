@@ -6,6 +6,8 @@ on:
 
 permissions:
   contents: read
+  issues: read
+  pull-requests: read
 
 concurrency:
   group: controller-workflow-surface-${{ github.event.pull_request.number }}
@@ -36,10 +38,24 @@ jobs:
           curl --fail --silent --show-error --location             "https://github.com/${GITHUB_REPOSITORY}/archive/${PR_HEAD_SHA}.tar.gz"             --output /tmp/controller-candidate.tar.gz
           tar -xzf /tmp/controller-candidate.tar.gz -C /tmp/controller-candidate --strip-components=1
 
-      - name: Enforce exact trusted-main workflow authorization
+      - name: Fetch trusted PR maintenance decisions
+        shell: bash
+        env:
+          GH_PR_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error             --header "Authorization: Bearer ${GH_PR_TOKEN}"             --header "Accept: application/vnd.github+json"             --header "X-GitHub-Api-Version: 2022-11-28"             "https://api.github.com/repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100"             --output /tmp/pr-comments.json
+          python3 - <<'PY'
+          import json
+          x=json.load(open("/tmp/pr-comments.json"))
+          assert isinstance(x,list) and len(x)<100, "too many PR comments for single-page trusted decision check"
+          PY
+
+      - name: Enforce exact owner-comment protected-surface authorization
         shell: bash
         env:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          python3 controller/workflow_surface_gate.py             --trusted-root "${GITHUB_WORKSPACE}"             --candidate-root /tmp/controller-candidate             --head-sha "${PR_HEAD_SHA}"
+          python3 controller/workflow_surface_gate.py             --trusted-root "${GITHUB_WORKSPACE}"             --candidate-root /tmp/controller-candidate             --head-sha "${PR_HEAD_SHA}"             --comments-file /tmp/pr-comments.json
