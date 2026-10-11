@@ -2,7 +2,7 @@ name: Controller Workflow Surface Gate
 
 on:
   pull_request_target:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
 
 permissions:
   contents: read
@@ -36,37 +36,10 @@ jobs:
           curl --fail --silent --show-error --location             "https://github.com/${GITHUB_REPOSITORY}/archive/${PR_HEAD_SHA}.tar.gz"             --output /tmp/controller-candidate.tar.gz
           tar -xzf /tmp/controller-candidate.tar.gz -C /tmp/controller-candidate --strip-components=1
 
-      - name: Block any workflow-surface mutation
+      - name: Enforce exact trusted-main workflow authorization
         shell: bash
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          import hashlib, sys
-
-          base = Path(".github/workflows")
-          cand = Path("/tmp/controller-candidate/.github/workflows")
-
-          def snap(root):
-              out={}
-              if not root.exists():
-                  return out
-              for p in sorted(root.rglob("*")):
-                  if p.is_file():
-                      rel=p.relative_to(root).as_posix()
-                      out[rel]=hashlib.sha256(p.read_bytes()).hexdigest()
-              return out
-
-          a=snap(base)
-          b=snap(cand)
-          if a != b:
-              added=sorted(set(b)-set(a))
-              removed=sorted(set(a)-set(b))
-              changed=sorted(k for k in set(a)&set(b) if a[k]!=b[k])
-              print("BLOCKED: normal PR may not mutate .github/workflows/**")
-              if added: print("added:", ", ".join(added))
-              if removed: print("removed:", ", ".join(removed))
-              if changed: print("changed:", ", ".join(changed))
-              sys.exit(1)
-          print("PASS: workflow surface unchanged")
-          PY
+          python3 controller/workflow_surface_gate.py             --trusted-root "${GITHUB_WORKSPACE}"             --candidate-root /tmp/controller-candidate             --head-sha "${PR_HEAD_SHA}"
