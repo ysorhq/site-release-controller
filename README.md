@@ -44,3 +44,8 @@ Bootstrap v2 never checks out the private repository. A short-lived read-only Ap
 ## Release v1 fail-closed state
 
 The original release workflow is intentionally disabled. A workflow dispatch now fails explicitly with `RELEASE_ENFORCEMENT_BLOCKED`; both legacy `verify-source` and `deploy` jobs are disabled. Reason: candidate-controlled scripts/composite action currently execute in the same runner context before trusted manifest admission. Release v2 must isolate candidate execution from trusted verifier state before any verify/deploy path can be re-enabled.
+
+
+## Encrypted GPT cloud source bridge
+
+Private source is never uploaded as plaintext from the public controller. A bootstrap request may carry an ephemeral GPT-cloud X.509 recipient certificate (public material only). Trusted protected `main` then reads the exact private commit with a short-lived read-only App token, verifies HEAD/tree, archives tracked bytes without executing candidate code, explicitly revokes the token, deletes the checkout, encrypts the source archive with CMS AES-256-GCM to the ephemeral recipient, deletes plaintext, and uploads only ciphertext chunks plus public digests. GPT cloud retains the private key, verifies artifact/cipher/plaintext digests after decryption, reconstructs the Git tree, and only then starts PRIMARY CI.
