@@ -29,8 +29,18 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  release-enforcement-blocked:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Fail closed while release v2 isolation is pending
+        shell: bash
+        run: |
+          echo "RELEASE_ENFORCEMENT_BLOCKED: release v1 is disabled until candidate execution is isolated from trusted manifest/deploy admission."
+          exit 1
+
   verify-source:
-    if: github.ref == 'refs/heads/main'
+    if: ${{ false }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     environment: source-read
@@ -167,7 +177,7 @@ jobs:
           retention-days: 1
 
   deploy:
-    if: inputs.deploy == true
+    if: ${{ false }}
     needs: verify-source
     runs-on: ubuntu-latest
     timeout-minutes: 15
