@@ -29,7 +29,7 @@ Future workflow maintenance is content-addressed:
 1. prepare the workflow-change PR and freeze its exact HEAD;
 2. let the trusted workflow-surface gate report the exact candidate workflow snapshot digest and changed paths;
 3. merge a separate non-workflow authorization entry into `maintenance/workflow-authorizations.json` on trusted `main`;
-4. rerun the workflow PR; the gate reads only trusted-main authorization and accepts only the exact authorized HEAD + workflow digest + changed paths;
+4. rerun the maintenance PR; the gate reads only trusted-main authorization and accepts only the exact authorized HEAD + protected-surface digest + changed paths;
 5. any push changes the HEAD/digest and fails closed.
 
 After this bootstrap transition, normal workflow maintenance no longer requires disabling repository rules.
@@ -37,3 +37,6 @@ After this bootstrap transition, normal workflow maintenance no longer requires 
 ## GPT Cloud bootstrap bundle
 
 `.github/workflows/gpt-cloud-bootstrap.yml` prepares bytes; it is not CI and cannot mint a CI PASS. It runs only from protected `main` with `source-read`, verifies exact private HEAD/tree, runs `npm ci --ignore-scripts` only to populate dependency bytes, downloads the pinned Playwright Chromium runtime, packages exact Node/npm-cache/browser bytes, deletes private source, and uploads only the source-free archive plus digest. GPT cloud independently verifies and consumes that bundle offline.
+
+
+Protected controller surface includes every file under `.github/workflows/**` plus `controller/workflow_surface_gate.py` and `controller/release_controller.py`. The authorization registry itself is deliberately outside that digest so a separate non-workflow trusted-main PR can authorize an exact frozen maintenance candidate.
