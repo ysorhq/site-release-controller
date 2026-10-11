@@ -304,7 +304,18 @@ jobs:
           permission-contents: read
           skip-token-revoke: true
 
-      - name: Archive exact tracked private source and revoke token
+      - name: Checkout exact private source for encrypted transport
+        if: env.SOURCE_BRIDGE_ENABLED == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ewgenij87snwork/yevgeniy-sorokin
+          ref: ${{ env.SOURCE_SHA }}
+          token: ${{ steps.source-bridge-token.outputs.token }}
+          persist-credentials: false
+          fetch-depth: 1
+          path: private-source-bridge
+
+      - name: Revoke source token, verify exact tree, archive tracked bytes
         if: env.SOURCE_BRIDGE_ENABLED == 'true'
         shell: bash
         env:
@@ -314,19 +325,15 @@ jobs:
           revoke() {
             curl --silent --show-error --fail-with-body               --request DELETE               --header "Authorization: Bearer ${GH_SOURCE_BRIDGE_TOKEN}"               --header "X-GitHub-Api-Version: 2022-11-28"               https://api.github.com/installation/token >/dev/null || true
           }
-          trap revoke EXIT
-          git -c http.extraheader="AUTHORIZATION: basic $(printf 'x-access-token:%s' "${GH_SOURCE_BRIDGE_TOKEN}" | base64 -w0)"             clone --no-checkout --filter=blob:none --depth=1             "https://github.com/ewgenij87snwork/yevgeniy-sorokin.git" "${RUNNER_TEMP}/private-source"
-          git -C "${RUNNER_TEMP}/private-source" fetch --depth=1 origin "${SOURCE_SHA}"
-          git -C "${RUNNER_TEMP}/private-source" checkout --detach "${SOURCE_SHA}"
-          test "$(git -C "${RUNNER_TEMP}/private-source" rev-parse HEAD)" = "${SOURCE_SHA}"
-          test "$(git -C "${RUNNER_TEMP}/private-source" rev-parse 'HEAD^{tree}')" = "${SOURCE_TREE}"
-          git -C "${RUNNER_TEMP}/private-source" ls-files -z |             tar -C "${RUNNER_TEMP}/private-source" --null -T -               --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner               -czf "${RUNNER_TEMP}/private-source.tar.gz"
-          sha256sum "${RUNNER_TEMP}/private-source.tar.gz" | awk '{print $1}' > "${RUNNER_TEMP}/private-source.tar.gz.sha256"
           revoke
-          trap - EXIT
           unset GH_SOURCE_BRIDGE_TOKEN
-          rm -rf "${RUNNER_TEMP}/private-source"
-          echo "PASS: exact private source archived; source token revoked; checkout deleted"
+          test "$(git -C private-source-bridge rev-parse HEAD)" = "${SOURCE_SHA}"
+          test "$(git -C private-source-bridge rev-parse 'HEAD^{tree}')" = "${SOURCE_TREE}"
+          git -C private-source-bridge ls-files -z |             tar -C private-source-bridge --null -T -               --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner               -czf "${RUNNER_TEMP}/private-source.tar.gz"
+          sha256sum "${RUNNER_TEMP}/private-source.tar.gz" | awk '{print $1}' > "${RUNNER_TEMP}/private-source.tar.gz.sha256"
+          rm -rf private-source-bridge
+          test ! -e private-source-bridge
+          echo "PASS: source token revoked before archive; exact private tree archived; checkout deleted"
 
       - name: Encrypt source archive to ephemeral GPT cloud recipient
         if: env.SOURCE_BRIDGE_ENABLED == 'true'
@@ -410,5 +417,5 @@ jobs:
         if: always() && env.SOURCE_BRIDGE_ENABLED == 'true'
         shell: bash
         run: |
-          rm -rf "${RUNNER_TEMP}/private-source" "${RUNNER_TEMP}/private-source-chunks"
+          rm -rf private-source-bridge "${RUNNER_TEMP}/private-source" "${RUNNER_TEMP}/private-source-chunks"
           rm -f "${RUNNER_TEMP}/private-source.cms" "${RUNNER_TEMP}/private-source.tar.gz" "${RUNNER_TEMP}/source-recipient.crt"
