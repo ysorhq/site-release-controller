@@ -45,19 +45,40 @@ jobs:
           set -euo pipefail
           if [ "${EVENT_NAME}" = "push" ]; then
             test -f bootstrap-requests/current.json
-            source_sha="$(python3 -c 'import json; print(json.load(open("bootstrap-requests/current.json"))["source_head"])')"
-            source_tree="$(python3 -c 'import json; print(json.load(open("bootstrap-requests/current.json"))["source_tree"])')"
-            request_sha="$(sha256sum bootstrap-requests/current.json | awk '{print $1}')"
+            python3 - <<'PY'
+          import base64, hashlib, json, os, re
+          from pathlib import Path
+          p=Path("bootstrap-requests/current.json")
+          raw=p.read_bytes()
+          d=json.loads(raw)
+          assert d.get("source_repo")=="ewgenij87snwork/yevgeniy-sorokin"
+          head=d.get("source_head",""); tree=d.get("source_tree","")
+          assert re.fullmatch(r"[0-9a-f]{40}",head)
+          assert re.fullmatch(r"[0-9a-f]{40}",tree)
+          cert=d.get("source_recipient_cert_b64")
+          enabled=bool(cert)
+          if enabled:
+              cert_bytes=base64.b64decode(cert,validate=True)
+              Path(os.environ["RUNNER_TEMP"],"source-recipient.crt").write_bytes(cert_bytes)
+          with open(os.environ["GITHUB_ENV"],"a") as f:
+              f.write(f"SOURCE_SHA={head}\n")
+              f.write(f"SOURCE_TREE={tree}\n")
+              f.write(f"REQUEST_SHA256={hashlib.sha256(raw).hexdigest()}\n")
+              f.write(f"SOURCE_BRIDGE_ENABLED={'true' if enabled else 'false'}\n")
+          PY
+            if [ "${SOURCE_BRIDGE_ENABLED:-}" = "true" ] || [ -f "${RUNNER_TEMP}/source-recipient.crt" ]; then
+              openssl x509 -in "${RUNNER_TEMP}/source-recipient.crt" -noout -checkend 60
+              recipient_sha="$(openssl x509 -in "${RUNNER_TEMP}/source-recipient.crt" -outform DER | sha256sum | awk '{print $1}')"
+              echo "SOURCE_RECIPIENT_CERT_SHA256=${recipient_sha}" >> "${GITHUB_ENV}"
+            fi
           else
-            source_sha="${INPUT_SOURCE_SHA}"
-            source_tree="${INPUT_SOURCE_TREE}"
-            request_sha="workflow-dispatch"
+            [[ "${INPUT_SOURCE_SHA}" =~ ^[0-9a-f]{40}$ ]]
+            [[ "${INPUT_SOURCE_TREE}" =~ ^[0-9a-f]{40}$ ]]
+            echo "SOURCE_SHA=${INPUT_SOURCE_SHA}" >> "${GITHUB_ENV}"
+            echo "SOURCE_TREE=${INPUT_SOURCE_TREE}" >> "${GITHUB_ENV}"
+            echo "REQUEST_SHA256=workflow-dispatch" >> "${GITHUB_ENV}"
+            echo "SOURCE_BRIDGE_ENABLED=false" >> "${GITHUB_ENV}"
           fi
-          [[ "${source_sha}" =~ ^[0-9a-f]{40}$ ]]
-          [[ "${source_tree}" =~ ^[0-9a-f]{40}$ ]]
-          echo "SOURCE_SHA=${source_sha}" >> "${GITHUB_ENV}"
-          echo "SOURCE_TREE=${source_tree}" >> "${GITHUB_ENV}"
-          echo "REQUEST_SHA256=${request_sha}" >> "${GITHUB_ENV}"
 
       - name: Mint short-lived read-only metadata token
         id: source-token
@@ -269,3 +290,125 @@ jobs:
       - name: Report digest only
         shell: bash
         run: echo "GPT cloud bootstrap SHA-256 ${bundle_sha256}; chunks=${chunk_count}"
+
+
+      - name: Mint short-lived read-only source bridge token
+        if: env.SOURCE_BRIDGE_ENABLED == 'true'
+        id: source-bridge-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.PRIVATE_SOURCE_APP_ID }}
+          private-key: ${{ secrets.PRIVATE_SOURCE_APP_PRIVATE_KEY }}
+          owner: ewgenij87snwork
+          repositories: yevgeniy-sorokin
+          permission-contents: read
+          skip-token-revoke: true
+
+      - name: Archive exact tracked private source and revoke token
+        if: env.SOURCE_BRIDGE_ENABLED == 'true'
+        shell: bash
+        env:
+          GH_SOURCE_BRIDGE_TOKEN: ${{ steps.source-bridge-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          revoke() {
+            curl --silent --show-error --fail-with-body               --request DELETE               --header "Authorization: Bearer ${GH_SOURCE_BRIDGE_TOKEN}"               --header "X-GitHub-Api-Version: 2022-11-28"               https://api.github.com/installation/token >/dev/null || true
+          }
+          trap revoke EXIT
+          git -c http.extraheader="AUTHORIZATION: basic $(printf 'x-access-token:%s' "${GH_SOURCE_BRIDGE_TOKEN}" | base64 -w0)"             clone --no-checkout --filter=blob:none --depth=1             "https://github.com/ewgenij87snwork/yevgeniy-sorokin.git" "${RUNNER_TEMP}/private-source"
+          git -C "${RUNNER_TEMP}/private-source" fetch --depth=1 origin "${SOURCE_SHA}"
+          git -C "${RUNNER_TEMP}/private-source" checkout --detach "${SOURCE_SHA}"
+          test "$(git -C "${RUNNER_TEMP}/private-source" rev-parse HEAD)" = "${SOURCE_SHA}"
+          test "$(git -C "${RUNNER_TEMP}/private-source" rev-parse 'HEAD^{tree}')" = "${SOURCE_TREE}"
+          git -C "${RUNNER_TEMP}/private-source" ls-files -z |             tar --null -T - -C "${RUNNER_TEMP}/private-source"               --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner               -czf "${RUNNER_TEMP}/private-source.tar.gz"
+          sha256sum "${RUNNER_TEMP}/private-source.tar.gz" | awk '{print $1}' > "${RUNNER_TEMP}/private-source.tar.gz.sha256"
+          revoke
+          trap - EXIT
+          unset GH_SOURCE_BRIDGE_TOKEN
+          rm -rf "${RUNNER_TEMP}/private-source"
+          echo "PASS: exact private source archived; source token revoked; checkout deleted"
+
+      - name: Encrypt source archive to ephemeral GPT cloud recipient
+        if: env.SOURCE_BRIDGE_ENABLED == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s "${RUNNER_TEMP}/private-source.tar.gz"
+          test -s "${RUNNER_TEMP}/source-recipient.crt"
+          openssl cms -encrypt -binary -aes-256-gcm             -in "${RUNNER_TEMP}/private-source.tar.gz"             -out "${RUNNER_TEMP}/private-source.cms" -outform DER             "${RUNNER_TEMP}/source-recipient.crt"
+          cipher_sha="$(sha256sum "${RUNNER_TEMP}/private-source.cms" | awk '{print $1}')"
+          plain_sha="$(cat "${RUNNER_TEMP}/private-source.tar.gz.sha256")"
+          cat > "${RUNNER_TEMP}/private-source-bridge.json" <<EOF
+          {
+            "schema": 1,
+            "source_repo": "ewgenij87snwork/yevgeniy-sorokin",
+            "source_head": "${SOURCE_SHA}",
+            "source_tree": "${SOURCE_TREE}",
+            "request_sha256": "${REQUEST_SHA256}",
+            "recipient_cert_sha256": "${SOURCE_RECIPIENT_CERT_SHA256}",
+            "plaintext_tar_sha256": "${plain_sha}",
+            "ciphertext_sha256": "${cipher_sha}",
+            "cipher": "CMS AES-256-GCM DER",
+            "controller_commit": "${GITHUB_SHA}"
+          }
+          EOF
+          rm -f "${RUNNER_TEMP}/private-source.tar.gz" "${RUNNER_TEMP}/source-recipient.crt"
+          test ! -e "${RUNNER_TEMP}/private-source.tar.gz"
+          mkdir -p "${RUNNER_TEMP}/private-source-chunks"
+          split -b 50M -d -a 2 "${RUNNER_TEMP}/private-source.cms" "${RUNNER_TEMP}/private-source-chunks/part-"
+          source_chunk_count="$(find "${RUNNER_TEMP}/private-source-chunks" -maxdepth 1 -type f -name 'part-*' | wc -l | tr -d ' ')"
+          test "${source_chunk_count}" -ge 1
+          test "${source_chunk_count}" -le 4
+          echo "source_chunk_count=${source_chunk_count}" >> "${GITHUB_ENV}"
+
+      - name: Upload encrypted source bridge metadata
+        if: env.SOURCE_BRIDGE_ENABLED == 'true'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: gpt-cloud-source-${{ env.SOURCE_SHA }}-meta
+          path: ${{ runner.temp }}/private-source-bridge.json
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Upload encrypted source chunk 00
+        if: env.SOURCE_BRIDGE_ENABLED == 'true'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: gpt-cloud-source-${{ env.SOURCE_SHA }}-part-00
+          path: ${{ runner.temp }}/private-source-chunks/part-00
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Upload encrypted source chunk 01
+        if: env.SOURCE_BRIDGE_ENABLED == 'true'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: gpt-cloud-source-${{ env.SOURCE_SHA }}-part-01
+          path: ${{ runner.temp }}/private-source-chunks/part-01
+          if-no-files-found: ignore
+          retention-days: 1
+
+      - name: Upload encrypted source chunk 02
+        if: env.SOURCE_BRIDGE_ENABLED == 'true'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: gpt-cloud-source-${{ env.SOURCE_SHA }}-part-02
+          path: ${{ runner.temp }}/private-source-chunks/part-02
+          if-no-files-found: ignore
+          retention-days: 1
+
+      - name: Upload encrypted source chunk 03
+        if: env.SOURCE_BRIDGE_ENABLED == 'true'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: gpt-cloud-source-${{ env.SOURCE_SHA }}-part-03
+          path: ${{ runner.temp }}/private-source-chunks/part-03
+          if-no-files-found: ignore
+          retention-days: 1
+
+      - name: Delete encrypted source working bytes
+        if: always() && env.SOURCE_BRIDGE_ENABLED == 'true'
+        shell: bash
+        run: |
+          rm -rf "${RUNNER_TEMP}/private-source" "${RUNNER_TEMP}/private-source-chunks"
+          rm -f "${RUNNER_TEMP}/private-source.cms" "${RUNNER_TEMP}/private-source.tar.gz" "${RUNNER_TEMP}/source-recipient.crt"
