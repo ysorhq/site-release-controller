@@ -1,0 +1,1 @@
+Changing only a non-workflow file must invalidate exact-head workflow authorization.
