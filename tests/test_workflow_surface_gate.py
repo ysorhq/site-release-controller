@@ -13,59 +13,65 @@ class Tests(unittest.TestCase):
         for r in [trusted,candidate]:
             (r/".github/workflows").mkdir(parents=True)
             (r/"maintenance").mkdir()
+            (r/"controller").mkdir()
             (r/".github/workflows/base.yml").write_text("name: base\n")
-            (r/"maintenance/workflow-authorizations.json").write_text('{"schema":1,"authorizations":[]}\n')
+            (r/"controller/workflow_surface_gate.py").write_text("gate\n")
+            (r/"controller/release_controller.py").write_text("release\n")
+            (r/"maintenance/workflow-authorizations.json").write_text('{"schema":2,"authorizations":[]}\n')
         return td,trusted,candidate
+    def authorize_exact(self,t,c,head=HEAD,expires=None):
+        _,dig=wg.protected_surface_snapshot(c)
+        paths=wg.changed_paths(wg.protected_surface_snapshot(t)[0],wg.protected_surface_snapshot(c)[0])
+        reg={"schema":2,"authorizations":[{
+          "head_sha":head,
+          "protected_surface_sha256":dig,
+          "changed_paths":paths,
+          "expires_at_epoch":int(time.time())+3600 if expires is None else expires,
+          "reason":"test"
+        }]}
+        (t/"maintenance/workflow-authorizations.json").write_text(json.dumps(reg))
     def test_unchanged(self):
         td,t,c=self.setup_roots()
         try:self.assertEqual(wg.authorize(t,c,HEAD)["mode"],"unchanged")
         finally:td.cleanup()
-    def test_unauthorized_change_blocks(self):
+    def test_unauthorized_workflow_change_blocks(self):
         td,t,c=self.setup_roots(); (c/".github/workflows/new.yml").write_text("name: new\n")
+        try:
+            with self.assertRaises(ValueError): wg.authorize(t,c,HEAD)
+        finally:td.cleanup()
+    def test_unauthorized_gate_script_change_blocks(self):
+        td,t,c=self.setup_roots(); (c/"controller/workflow_surface_gate.py").write_text("tampered\n")
+        try:
+            with self.assertRaises(ValueError): wg.authorize(t,c,HEAD)
+        finally:td.cleanup()
+    def test_unauthorized_release_controller_change_blocks(self):
+        td,t,c=self.setup_roots(); (c/"controller/release_controller.py").write_text("tampered\n")
         try:
             with self.assertRaises(ValueError): wg.authorize(t,c,HEAD)
         finally:td.cleanup()
     def test_exact_authorization_passes(self):
         td,t,c=self.setup_roots(); (c/".github/workflows/new.yml").write_text("name: new\n")
         try:
-            _,dig=wg.workflow_snapshot(c)
-            reg={"schema":1,"authorizations":[{
-              "head_sha":HEAD,"workflow_snapshot_sha256":dig,
-              "changed_paths":["new.yml"],"expires_at_epoch":int(time.time())+3600,
-              "reason":"test"
-            }]}
-            (t/"maintenance/workflow-authorizations.json").write_text(json.dumps(reg))
+            self.authorize_exact(t,c)
             self.assertEqual(wg.authorize(t,c,HEAD)["mode"],"authorized")
         finally:td.cleanup()
     def test_wrong_head_blocks(self):
         td,t,c=self.setup_roots(); (c/".github/workflows/new.yml").write_text("name: new\n")
         try:
-            _,dig=wg.workflow_snapshot(c)
-            reg={"schema":1,"authorizations":[{
-              "head_sha":"b"*40,"workflow_snapshot_sha256":dig,
-              "changed_paths":["new.yml"],"expires_at_epoch":int(time.time())+3600,"reason":"test"}]}
-            (t/"maintenance/workflow-authorizations.json").write_text(json.dumps(reg))
+            self.authorize_exact(t,c,head="b"*40)
             with self.assertRaises(ValueError): wg.authorize(t,c,HEAD)
         finally:td.cleanup()
     def test_digest_drift_blocks(self):
         td,t,c=self.setup_roots(); (c/".github/workflows/new.yml").write_text("name: new\n")
         try:
-            _,dig=wg.workflow_snapshot(c)
-            reg={"schema":1,"authorizations":[{
-              "head_sha":HEAD,"workflow_snapshot_sha256":dig,
-              "changed_paths":["new.yml"],"expires_at_epoch":int(time.time())+3600,"reason":"test"}]}
-            (t/"maintenance/workflow-authorizations.json").write_text(json.dumps(reg))
+            self.authorize_exact(t,c)
             (c/".github/workflows/new.yml").write_text("name: changed\n")
             with self.assertRaises(ValueError): wg.authorize(t,c,HEAD)
         finally:td.cleanup()
     def test_expired_blocks(self):
         td,t,c=self.setup_roots(); (c/".github/workflows/new.yml").write_text("name: new\n")
         try:
-            _,dig=wg.workflow_snapshot(c)
-            reg={"schema":1,"authorizations":[{
-              "head_sha":HEAD,"workflow_snapshot_sha256":dig,
-              "changed_paths":["new.yml"],"expires_at_epoch":1,"reason":"test"}]}
-            (t/"maintenance/workflow-authorizations.json").write_text(json.dumps(reg))
+            self.authorize_exact(t,c,expires=1)
             with self.assertRaises(ValueError): wg.authorize(t,c,HEAD,now=2)
         finally:td.cleanup()
 
