@@ -40,3 +40,8 @@ After this bootstrap transition, normal workflow maintenance no longer requires 
 
 
 Protected controller surface includes every file under `.github/workflows/**` plus `controller/workflow_surface_gate.py` and `controller/release_controller.py`. The authorization registry itself is deliberately outside that digest so a separate non-workflow trusted-main PR can authorize an exact frozen maintenance candidate.
+
+
+### Bootstrap v2 trust boundary
+
+Bootstrap v2 never checks out the private repository. A short-lived read-only App token is exposed only to one trusted metadata-fetch shell step, which verifies the exact commit/tree and downloads only root `package.json` plus `package-lock.json`, then revokes the token. Dependency installation uses `npm ci --ignore-scripts` only after token revocation. The package metadata files are removed before Playwright package code is executed. The uploaded artifact contains only exact Node runtime bytes, npm cache content-addressed bytes, Playwright Chromium runtime bytes, a manifest and SHA-256; no private source or Git metadata.
