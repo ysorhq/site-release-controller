@@ -181,20 +181,91 @@ jobs:
           EOF
           tar -C "${out}" --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner             -czf "${RUNNER_TEMP}/gpt-cloud-bootstrap.tgz" manifest.json payload
           sha256sum "${RUNNER_TEMP}/gpt-cloud-bootstrap.tgz" > "${RUNNER_TEMP}/gpt-cloud-bootstrap.tgz.sha256"
+          cp "${out}/manifest.json" "${RUNNER_TEMP}/gpt-cloud-bootstrap.manifest.json"
+          mkdir -p "${RUNNER_TEMP}/gpt-cloud-bootstrap-chunks"
+          split -b 60M -d -a 2 "${RUNNER_TEMP}/gpt-cloud-bootstrap.tgz" "${RUNNER_TEMP}/gpt-cloud-bootstrap-chunks/part-"
+          chunk_count="$(find "${RUNNER_TEMP}/gpt-cloud-bootstrap-chunks" -maxdepth 1 -type f -name 'part-*' | wc -l | tr -d ' ')"
+          test "${chunk_count}" -ge 1
+          test "${chunk_count}" -le 8
+          echo "chunk_count=${chunk_count}" >> "${GITHUB_ENV}"
           test ! -e "${out}/payload/source"
           test ! -e "${out}/payload/.git"
           echo "bundle_sha256=$(cut -d' ' -f1 "${RUNNER_TEMP}/gpt-cloud-bootstrap.tgz.sha256")" >> "${GITHUB_ENV}"
 
-      - name: Upload bootstrap bytes only
+      - name: Upload bootstrap metadata
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: gpt-cloud-bootstrap-${{ env.SOURCE_SHA }}
+          name: gpt-cloud-bootstrap-${{ env.SOURCE_SHA }}-meta
           path: |
-            ${{ runner.temp }}/gpt-cloud-bootstrap.tgz
             ${{ runner.temp }}/gpt-cloud-bootstrap.tgz.sha256
+            ${{ runner.temp }}/gpt-cloud-bootstrap.manifest.json
           if-no-files-found: error
+          retention-days: 3
+
+      - name: Upload bootstrap chunk 00
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: gpt-cloud-bootstrap-${{ env.SOURCE_SHA }}-part-00
+          path: ${{ runner.temp }}/gpt-cloud-bootstrap-chunks/part-00
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Upload bootstrap chunk 01
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: gpt-cloud-bootstrap-${{ env.SOURCE_SHA }}-part-01
+          path: ${{ runner.temp }}/gpt-cloud-bootstrap-chunks/part-01
+          if-no-files-found: ignore
+          retention-days: 3
+
+      - name: Upload bootstrap chunk 02
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: gpt-cloud-bootstrap-${{ env.SOURCE_SHA }}-part-02
+          path: ${{ runner.temp }}/gpt-cloud-bootstrap-chunks/part-02
+          if-no-files-found: ignore
+          retention-days: 3
+
+      - name: Upload bootstrap chunk 03
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: gpt-cloud-bootstrap-${{ env.SOURCE_SHA }}-part-03
+          path: ${{ runner.temp }}/gpt-cloud-bootstrap-chunks/part-03
+          if-no-files-found: ignore
+          retention-days: 3
+
+      - name: Upload bootstrap chunk 04
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: gpt-cloud-bootstrap-${{ env.SOURCE_SHA }}-part-04
+          path: ${{ runner.temp }}/gpt-cloud-bootstrap-chunks/part-04
+          if-no-files-found: ignore
+          retention-days: 3
+
+      - name: Upload bootstrap chunk 05
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: gpt-cloud-bootstrap-${{ env.SOURCE_SHA }}-part-05
+          path: ${{ runner.temp }}/gpt-cloud-bootstrap-chunks/part-05
+          if-no-files-found: ignore
+          retention-days: 3
+
+      - name: Upload bootstrap chunk 06
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: gpt-cloud-bootstrap-${{ env.SOURCE_SHA }}-part-06
+          path: ${{ runner.temp }}/gpt-cloud-bootstrap-chunks/part-06
+          if-no-files-found: ignore
+          retention-days: 3
+
+      - name: Upload bootstrap chunk 07
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: gpt-cloud-bootstrap-${{ env.SOURCE_SHA }}-part-07
+          path: ${{ runner.temp }}/gpt-cloud-bootstrap-chunks/part-07
+          if-no-files-found: ignore
           retention-days: 3
 
       - name: Report digest only
         shell: bash
-        run: echo "GPT cloud bootstrap SHA-256 ${bundle_sha256}"
+        run: echo "GPT cloud bootstrap SHA-256 ${bundle_sha256}; chunks=${chunk_count}"
