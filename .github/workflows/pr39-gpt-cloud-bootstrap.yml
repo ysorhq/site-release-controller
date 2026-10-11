@@ -77,12 +77,21 @@ jobs:
           JSON
           cat "$RUNNER_TEMP/bootstrap.json"
 
-      - name: Upload public dependency/runtime bytes
+      - name: Upload npm dependency cache
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: pr39-gpt-cloud-bootstrap
+          name: pr39-gpt-cloud-npm-cache
           path: |
             ${{ runner.temp }}/npm-cache.tar.gz
+            ${{ runner.temp }}/bootstrap.json
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Upload Playwright browser cache
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: pr39-gpt-cloud-playwright-cache
+          path: |
             ${{ runner.temp }}/ms-playwright.tar.gz
             ${{ runner.temp }}/bootstrap.json
           if-no-files-found: error
