@@ -1,4 +1,14 @@
 {
   "schema": 1,
-  "authorizations": []
+  "authorizations": [
+    {
+      "head_sha": "8f39fb9adf13db76121f0c2c64920ea596980a35",
+      "workflow_snapshot_sha256": "1a5cf002cbd12a74f09a9e5b794be42d4d94364f526c114a8ee882b4482d9e9c",
+      "changed_paths": [
+        "unauthorized-maintenance-canary.yml"
+      ],
+      "expires_at_epoch": 1791699557,
+      "reason": "Positive-path canary for content-addressed workflow maintenance PR #14; never authorize any other head."
+    }
+  ]
 }
