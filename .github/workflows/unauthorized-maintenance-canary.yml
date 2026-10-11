@@ -1,0 +1,10 @@
+name: Unauthorized workflow maintenance canary
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "This workflow is harmless but must require exact trusted authorization."
