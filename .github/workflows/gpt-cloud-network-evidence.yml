@@ -119,8 +119,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          node <<'JS'
-          const fs=require('fs'), path=require('path');
+          node --input-type=module <<'JS'
+          import fs from 'node:fs'; import path from 'node:path';
           const root=process.env.RUNNER_TEMP;
           const contract=JSON.parse(fs.readFileSync(path.join(root,'network-input/semantic/generated/public-contract.json'),'utf8'));
           const observations={schema:1,observed_at:new Date().toISOString(),canonical_origin:contract.canonical_origin,routes:[],sitemap:null,missing:null};
