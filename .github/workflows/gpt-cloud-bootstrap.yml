@@ -320,7 +320,7 @@ jobs:
           git -C "${RUNNER_TEMP}/private-source" checkout --detach "${SOURCE_SHA}"
           test "$(git -C "${RUNNER_TEMP}/private-source" rev-parse HEAD)" = "${SOURCE_SHA}"
           test "$(git -C "${RUNNER_TEMP}/private-source" rev-parse 'HEAD^{tree}')" = "${SOURCE_TREE}"
-          git -C "${RUNNER_TEMP}/private-source" ls-files -z |             tar --null -T - -C "${RUNNER_TEMP}/private-source"               --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner               -czf "${RUNNER_TEMP}/private-source.tar.gz"
+          git -C "${RUNNER_TEMP}/private-source" ls-files -z |             tar -C "${RUNNER_TEMP}/private-source" --null -T -               --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner               -czf "${RUNNER_TEMP}/private-source.tar.gz"
           sha256sum "${RUNNER_TEMP}/private-source.tar.gz" | awk '{print $1}' > "${RUNNER_TEMP}/private-source.tar.gz.sha256"
           revoke
           trap - EXIT
