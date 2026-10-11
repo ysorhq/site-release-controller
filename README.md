@@ -39,3 +39,8 @@ Protected controller surface includes every file under `.github/workflows/**` pl
 ### Bootstrap v2 trust boundary
 
 Bootstrap v2 never checks out the private repository. A short-lived read-only App token is exposed only to one trusted metadata-fetch shell step, which verifies the exact commit/tree and downloads only root `package.json` plus `package-lock.json`, then revokes the token. Dependency installation uses `npm ci --ignore-scripts` only after token revocation. The package metadata files are removed before Playwright package code is executed. The uploaded artifact contains only exact Node runtime bytes, npm cache content-addressed bytes, Playwright Chromium runtime bytes, a manifest and SHA-256; no private source or Git metadata.
+
+
+## Release v1 fail-closed state
+
+The original release workflow is intentionally disabled. A workflow dispatch now fails explicitly with `RELEASE_ENFORCEMENT_BLOCKED`; both legacy `verify-source` and `deploy` jobs are disabled. Reason: candidate-controlled scripts/composite action currently execute in the same runner context before trusted manifest admission. Release v2 must isolate candidate execution from trusted verifier state before any verify/deploy path can be re-enabled.
