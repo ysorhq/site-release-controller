@@ -33,10 +33,7 @@ Protected controller surface includes every file under `.github/workflows/**` pl
 
 ## GPT Cloud bootstrap bundle
 
-`.github/workflows/gpt-cloud-bootstrap.yml` prepares bytes; it is not CI and cannot mint a CI PASS. It runs only from protected `main` with `source-read`, verifies exact private HEAD/tree, runs `npm ci --ignore-scripts` only to populate dependency bytes, downloads the pinned Playwright Chromium runtime, packages exact Node/npm-cache/browser bytes, deletes private source, and uploads only the source-free archive plus digest. GPT cloud independently verifies and consumes that bundle offline.
-
-
-Protected controller surface includes every file under `.github/workflows/**` plus `controller/workflow_surface_gate.py` and `controller/release_controller.py`. The authorization registry itself is deliberately outside that digest so a separate non-workflow trusted-main PR can authorize an exact frozen maintenance candidate.
+`.github/workflows/gpt-cloud-bootstrap.yml` prepares bytes; it is not CI and cannot mint a CI PASS. It runs only from protected `main` with `source-read`, verifies exact private HEAD/tree through the GitHub API, retains only package metadata long enough to populate dependency bytes, revokes the source token before package execution, downloads the pinned Playwright Chromium runtime, and uploads only the source-free Node/npm-cache/browser archive plus digest. GPT cloud independently verifies and consumes that bundle offline.
 
 
 ### Bootstrap v2 trust boundary
