@@ -1,0 +1,1 @@
+Any candidate push must invalidate owner-comment authorization by exact HEAD.
