@@ -1,4 +1,14 @@
 {
   "schema": 2,
-  "authorizations": []
+  "authorizations": [
+    {
+      "head_sha": "23bcc62438c90a30c8be30e801bd04f153b2851b",
+      "protected_surface_sha256": "768f9bad8de7f8c5fe7e9c108dfec48dba420affa728cc4615d1beef551c4300",
+      "changed_paths": [
+        ".github/workflows/gpt-cloud-bootstrap.yml"
+      ],
+      "expires_at_epoch": 1791698400,
+      "reason": "Authorize bootstrap v2 isolated metadata/token boundary for PR #19 only."
+    }
+  ]
 }
