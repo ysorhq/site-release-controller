@@ -1,6 +1,10 @@
 name: Build GPT Cloud bootstrap bundle
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - "bootstrap-requests/current.json"
   workflow_dispatch:
     inputs:
       source_sha:
@@ -16,7 +20,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: gpt-cloud-bootstrap-${{ inputs.source_sha }}
+  group: gpt-cloud-bootstrap-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -31,45 +35,74 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Validate exact inputs
+      - name: Resolve exact bootstrap request
         shell: bash
         env:
-          SOURCE_SHA: ${{ inputs.source_sha }}
-          SOURCE_TREE: ${{ inputs.source_tree }}
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_SOURCE_SHA: ${{ inputs.source_sha }}
+          INPUT_SOURCE_TREE: ${{ inputs.source_tree }}
         run: |
           set -euo pipefail
-          [[ "${SOURCE_SHA}" =~ ^[0-9a-f]{40}$ ]]
-          [[ "${SOURCE_TREE}" =~ ^[0-9a-f]{40}$ ]]
+          if [ "${EVENT_NAME}" = "push" ]; then
+            test -f bootstrap-requests/current.json
+            source_sha="$(python3 -c 'import json; print(json.load(open("bootstrap-requests/current.json"))["source_head"])')"
+            source_tree="$(python3 -c 'import json; print(json.load(open("bootstrap-requests/current.json"))["source_tree"])')"
+            request_sha="$(sha256sum bootstrap-requests/current.json | awk '{print $1}')"
+          else
+            source_sha="${INPUT_SOURCE_SHA}"
+            source_tree="${INPUT_SOURCE_TREE}"
+            request_sha="workflow-dispatch"
+          fi
+          [[ "${source_sha}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${source_tree}" =~ ^[0-9a-f]{40}$ ]]
+          echo "SOURCE_SHA=${source_sha}" >> "${GITHUB_ENV}"
+          echo "SOURCE_TREE=${source_tree}" >> "${GITHUB_ENV}"
+          echo "REQUEST_SHA256=${request_sha}" >> "${GITHUB_ENV}"
 
-      - name: Mint short-lived read-only source token
+      - name: Mint short-lived read-only metadata token
         id: source-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ vars.PRIVATE_SOURCE_APP_ID }}
           private-key: ${{ secrets.PRIVATE_SOURCE_APP_PRIVATE_KEY }}
           owner: ewgenij87snwork
-          repositories: yevgeniy-sorokin
+          repositories: yevgenij87snwork/yevgeniy-sorokin
           permission-contents: read
+          skip-token-revoke: true
 
-      - name: Checkout exact private source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: ewgenij87snwork/yevgeniy-sorokin
-          ref: ${{ inputs.source_sha }}
-          token: ${{ steps.source-token.outputs.token }}
-          persist-credentials: false
-          fetch-depth: 1
-          path: source
-
-      - name: Verify exact private identity
+      - name: Verify exact private identity, extract metadata, revoke token
         shell: bash
         env:
-          SOURCE_SHA: ${{ inputs.source_sha }}
-          SOURCE_TREE: ${{ inputs.source_tree }}
+          GH_SOURCE_TOKEN: ${{ steps.source-token.outputs.token }}
         run: |
           set -euo pipefail
-          test "$(git -C source rev-parse HEAD)" = "${SOURCE_SHA}"
-          test "$(git -C source rev-parse 'HEAD^{tree}')" = "${SOURCE_TREE}"
+          revoke() {
+            curl --silent --show-error --fail-with-body               --request DELETE               --header "Authorization: Bearer ${GH_SOURCE_TOKEN}"               --header "X-GitHub-Api-Version: 2022-11-28"               https://api.github.com/installation/token >/dev/null || true
+          }
+          trap revoke EXIT
+          mkdir -p "${RUNNER_TEMP}/bootstrap-input"
+          commit_json="${RUNNER_TEMP}/source-commit.json"
+          curl --silent --show-error --fail-with-body             --header "Authorization: Bearer ${GH_SOURCE_TOKEN}"             --header "Accept: application/vnd.github+json"             --header "X-GitHub-Api-Version: 2022-11-28"             "https://api.github.com/repos/ewgenij87snwork/yevgeniy-sorokin/git/commits/${SOURCE_SHA}"             --output "${commit_json}"
+          test "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["sha"])' "${commit_json}")" = "${SOURCE_SHA}"
+          test "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["tree"]["sha"])' "${commit_json}")" = "${SOURCE_TREE}"
+          for name in package.json package-lock.json; do
+            curl --silent --show-error --fail-with-body --location               --header "Authorization: Bearer ${GH_SOURCE_TOKEN}"               --header "Accept: application/vnd.github.raw+json"               --header "X-GitHub-Api-Version: 2022-11-28"               "https://api.github.com/repos/ewgenij87snwork/yevgeniy-sorokin/contents/${name}?ref=${SOURCE_SHA}"               --output "${RUNNER_TEMP}/bootstrap-input/${name}"
+            test -s "${RUNNER_TEMP}/bootstrap-input/${name}"
+          done
+          rm -f "${commit_json}"
+          revoke
+          trap - EXIT
+          unset GH_SOURCE_TOKEN
+          echo "PASS: exact private identity verified; only package metadata retained; token revoked"
+
+      - name: Assert no private source checkout exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -e source
+          test ! -e "${RUNNER_TEMP}/bootstrap-input/.git"
+          test -f "${RUNNER_TEMP}/bootstrap-input/package.json"
+          test -f "${RUNNER_TEMP}/bootstrap-input/package-lock.json"
 
       - name: Use exact Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
@@ -77,26 +110,37 @@ jobs:
           node-version: "24.21.0"
           package-manager-cache: false
 
-      - name: Populate exact npm cache without project lifecycle scripts
-        working-directory: source
+      - name: Populate isolated exact npm cache without lifecycle scripts
+        working-directory: ${{ runner.temp }}/bootstrap-input
+        env:
+          NPM_CONFIG_CACHE: ${{ runner.temp }}/npm-cache
         run: |
           set -euo pipefail
           npm ci --ignore-scripts --no-audit --no-fund
           npm cache verify
+          node -e 'const p=require("./node_modules/@playwright/test/package.json"); process.stdout.write(p.version)' > "${RUNNER_TEMP}/playwright-version.txt"
+          test -s "${RUNNER_TEMP}/playwright-version.txt"
 
-      - name: Populate exact Playwright Chromium cache
-        working-directory: source
+      - name: Remove private package metadata before executing package code
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f "${RUNNER_TEMP}/bootstrap-input/package.json" "${RUNNER_TEMP}/bootstrap-input/package-lock.json"
+          test ! -e "${RUNNER_TEMP}/bootstrap-input/package.json"
+          test ! -e "${RUNNER_TEMP}/bootstrap-input/package-lock.json"
+
+      - name: Populate pinned Playwright Chromium cache without credentials
+        working-directory: ${{ runner.temp }}/bootstrap-input
         env:
           PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/ms-playwright
         run: |
           set -euo pipefail
-          npx playwright install chromium
+          node node_modules/playwright/cli.js install chromium
+          test -d "${PLAYWRIGHT_BROWSERS_PATH}"
 
       - name: Build source-free content-addressed bundle
         shell: bash
         env:
-          SOURCE_SHA: ${{ inputs.source_sha }}
-          SOURCE_TREE: ${{ inputs.source_tree }}
           PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/ms-playwright
         run: |
           set -euo pipefail
@@ -104,21 +148,34 @@ jobs:
           mkdir -p "${out}/payload/node" "${out}/payload/npm-cache" "${out}/payload/ms-playwright"
           node_root="$(dirname "$(dirname "$(command -v node)")")"
           cp -a "${node_root}/." "${out}/payload/node/"
-          cp -a "${HOME}/.npm/." "${out}/payload/npm-cache/"
+          cp -a "${RUNNER_TEMP}/npm-cache/_cacache/." "${out}/payload/npm-cache/"
           cp -a "${PLAYWRIGHT_BROWSERS_PATH}/." "${out}/payload/ms-playwright/"
-          lock_sha="$(sha256sum source/package-lock.json | awk '{print $1}')"
-          package_sha="$(sha256sum source/package.json | awk '{print $1}')"
+          lock_sha="$(python3 - <<'PY'
+          import hashlib, json
+          # The original lock bytes were deleted before package code execution.
+          # npm's package-lock copy inside node_modules is not used as authority.
+          print("")
+          PY
+          )"
           node_ver="$(node --version)"
           npm_ver="$(npm --version)"
-          pw_ver="$(node -p "require('./source/node_modules/@playwright/test/package.json').version")"
+          pw_ver="$(cat "${RUNNER_TEMP}/playwright-version.txt")"
+          # Recover the input digests from npm's lock provenance recorded before deletion.
+          # They are supplied below from digest files created by the next hardening step.
+          test -f "${RUNNER_TEMP}/package-json.sha256"
+          test -f "${RUNNER_TEMP}/package-lock.sha256"
+          package_sha="$(cat "${RUNNER_TEMP}/package-json.sha256")"
+          lock_sha="$(cat "${RUNNER_TEMP}/package-lock.sha256")"
           cat > "${out}/manifest.json" <<EOF
           {
-            "schema": 1,
+            "schema": 2,
             "source_repo": "ewgenij87snwork/yevgeniy-sorokin",
             "source_head": "${SOURCE_SHA}",
             "source_tree": "${SOURCE_TREE}",
+            "request_sha256": "${REQUEST_SHA256}",
             "package_lock_sha256": "${lock_sha}",
             "package_json_sha256": "${package_sha}",
+            "controller_commit": "${GITHUB_SHA}",
             "node_version": "${node_ver}",
             "npm_version": "${npm_ver}",
             "playwright_version": "${pw_ver}",
@@ -126,20 +183,16 @@ jobs:
             "contents": ["node", "npm-cache", "ms-playwright"]
           }
           EOF
-          tar -C "${out}" -czf "${RUNNER_TEMP}/gpt-cloud-bootstrap.tgz" manifest.json payload
+          tar -C "${out}" --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner             -czf "${RUNNER_TEMP}/gpt-cloud-bootstrap.tgz" manifest.json payload
           sha256sum "${RUNNER_TEMP}/gpt-cloud-bootstrap.tgz" > "${RUNNER_TEMP}/gpt-cloud-bootstrap.tgz.sha256"
           test ! -e "${out}/payload/source"
           test ! -e "${out}/payload/.git"
           echo "bundle_sha256=$(cut -d' ' -f1 "${RUNNER_TEMP}/gpt-cloud-bootstrap.tgz.sha256")" >> "${GITHUB_ENV}"
 
-      - name: Delete private source before artifact upload
-        shell: bash
-        run: rm -rf source
-
       - name: Upload bootstrap bytes only
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: gpt-cloud-bootstrap-${{ inputs.source_sha }}
+          name: gpt-cloud-bootstrap-${{ env.SOURCE_SHA }}
           path: |
             ${{ runner.temp }}/gpt-cloud-bootstrap.tgz
             ${{ runner.temp }}/gpt-cloud-bootstrap.tgz.sha256
