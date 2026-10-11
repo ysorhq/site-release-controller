@@ -1,0 +1,10 @@
+name: Provider-required workflow gate canary
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "harmless; must not merge without exact workflow authorization"
