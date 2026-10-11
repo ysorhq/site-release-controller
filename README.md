@@ -23,16 +23,13 @@ The source-reader GitHub App must be installed only on `ewgenij87snwork/yevgeniy
 
 ## Workflow maintenance
 
-Normal PRs cannot mutate `.github/workflows/**`.
+Normal PRs cannot mutate the protected controller surface.
 
-Future workflow maintenance is content-addressed:
-1. prepare the workflow-change PR and freeze its exact HEAD;
-2. let the trusted workflow-surface gate report the exact candidate workflow snapshot digest and changed paths;
-3. merge a separate non-workflow authorization entry into `maintenance/workflow-authorizations.json` on trusted `main`;
-4. rerun the maintenance PR; the gate reads only trusted-main authorization and accepts only the exact authorized HEAD + protected-surface digest + changed paths;
-5. any push changes the HEAD/digest and fails closed.
+Maintenance authorization is carried by an exact GitHub PR Conversation comment from `ewgenij87snwork`, not by a commit in `main`. The trusted-base gate accepts only a two-line comment: first `CONTROLLER_MAINTENANCE_V1`, then one compact JSON object binding exact `head_sha`, exact `protected_surface_sha256`, exact sorted `changed_paths`, an `expires_at_epoch` no more than four hours ahead, and a non-empty `reason`.
 
-After this bootstrap transition, normal workflow maintenance no longer requires disabling repository rules.
+Because authorization lives outside the candidate branch and does not mutate `main`, strict up-to-date required checks remain enabled. Any candidate push changes the HEAD and invalidates the authorization immediately. Candidate code receives no write-capable token and cannot create its own trusted authorization comment.
+
+Protected controller surface includes every file under `.github/workflows/**` plus `controller/workflow_surface_gate.py` and `controller/release_controller.py`.
 
 ## GPT Cloud bootstrap bundle
 
