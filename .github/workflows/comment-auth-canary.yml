@@ -1,0 +1,10 @@
+name: Comment authorization canary
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "harmless maintenance canary"
