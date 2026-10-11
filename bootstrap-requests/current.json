@@ -3,6 +3,7 @@
   "source_repo": "ewgenij87snwork/yevgeniy-sorokin",
   "source_head": "d2884d36fb1b488ac8d7e171fe4bcb8238c5d9dd",
   "source_tree": "ed30d5a3528c8c37521febcc2e05a5f987ee414c",
-  "purpose": "fresh GPT Cloud PRIMARY CI bootstrap for Site PR #39",
-  "requested_at": "2026-10-11"
+  "purpose": "fresh GPT Cloud PRIMARY CI bootstrap for Site PR #39 via bounded chunk transport",
+  "requested_at": "2026-10-11",
+  "transport_revision": 2
 }
