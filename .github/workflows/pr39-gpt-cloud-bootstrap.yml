@@ -1,0 +1,89 @@
+name: PR39 GPT-cloud bootstrap bytes
+
+on:
+  push:
+    branches:
+      - "test/gpt-cloud-bootstrap-pr39-20261011"
+
+permissions:
+  contents: read
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout public bootstrap manifest only
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Use exact Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "24.21.0"
+          package-manager-cache: false
+
+      - name: Populate content-addressed npm cache
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(wc -l < bootstrap/pr39/npm-cache-manifest.txt)" -eq 415
+          CACHE="$RUNNER_TEMP/npm-cache"
+          mkdir -p "$CACHE"
+          cut -f2 bootstrap/pr39/npm-cache-manifest.txt | while IFS= read -r url; do
+            npm cache add "$url" --cache "$CACHE" --silent
+          done
+          npm cache verify --cache "$CACHE"
+          tar -C "$RUNNER_TEMP" -czf "$RUNNER_TEMP/npm-cache.tar.gz" npm-cache
+
+      - name: Populate exact Playwright Chromium cache
+        shell: bash
+        run: |
+          set -euo pipefail
+          WORK="$RUNNER_TEMP/pw"
+          mkdir -p "$WORK"
+          cd "$WORK"
+          printf '%s\n' '{"private":true,"devDependencies":{"@playwright/test":"1.63.0"}}' > package.json
+          npm install --ignore-scripts --no-audit --no-fund
+          npx playwright install chromium
+          tar -C "$HOME/.cache" -czf "$RUNNER_TEMP/ms-playwright.tar.gz" ms-playwright
+
+      - name: Emit bootstrap manifest
+        shell: bash
+        env:
+          LOCK_GIT_BLOB_SHA: 57dae286dbb5c58966400720cfb738c777939c3a
+        run: |
+          set -euo pipefail
+          NODE_VERSION="$(node --version)"
+          NPM_VERSION="$(npm --version)"
+          NPM_SHA="$(sha256sum "$RUNNER_TEMP/npm-cache.tar.gz" | awk '{print $1}')"
+          PW_SHA="$(sha256sum "$RUNNER_TEMP/ms-playwright.tar.gz" | awk '{print $1}')"
+          cat > "$RUNNER_TEMP/bootstrap.json" <<JSON
+          {
+            "schema": 1,
+            "source_repo": "ewgenij87snwork/yevgeniy-sorokin",
+            "source_head": "d2884d36fb1b488ac8d7e171fe4bcb8238c5d9dd",
+            "source_tree": "ed30d5a3528c8c37521febcc2e05a5f987ee414c",
+            "package_lock_git_blob_sha": "$LOCK_GIT_BLOB_SHA",
+            "npm_tarball_count": 415,
+            "node": "$NODE_VERSION",
+            "npm": "$NPM_VERSION",
+            "playwright": "1.63.0",
+            "platform": "linux-x64",
+            "npm_cache_tar_sha256": "$NPM_SHA",
+            "ms_playwright_tar_sha256": "$PW_SHA"
+          }
+          JSON
+          cat "$RUNNER_TEMP/bootstrap.json"
+
+      - name: Upload public dependency/runtime bytes
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: pr39-gpt-cloud-bootstrap
+          path: |
+            ${{ runner.temp }}/npm-cache.tar.gz
+            ${{ runner.temp }}/ms-playwright.tar.gz
+            ${{ runner.temp }}/bootstrap.json
+          if-no-files-found: error
+          retention-days: 1
