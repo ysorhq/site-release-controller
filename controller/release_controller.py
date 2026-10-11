@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import argparse, hashlib, json, os, re, sys, time
+import argparse, hashlib, json, re, sys, time
 from pathlib import Path
 
 HEX40=re.compile(r"^[0-9a-f]{40}$")
@@ -16,6 +16,25 @@ REQUIRED_GATES={
   "lighthouse_mobile":"33/33",
   "lighthouse_desktop":"33/33",
 }
+REQUIRED_TOOLCHAIN={
+  "node":"24.21.0",
+  "npm":"11.19.0",
+  "playwright":"1.63.0",
+  "lighthouse":"13.5.0",
+  "platform":"linux-x64",
+}
+REQUIRED_EVIDENCE_KEYS={
+  "bootstrap_manifest_sha256",
+  "ci_contract_sha256",
+  "dependency_audit_sha256",
+  "full_log_sha256",
+  "lighthouse_desktop_sha256",
+  "lighthouse_mobile_sha256",
+  "playwright_sha256",
+  "source_snapshot_sha256",
+  "ssg_sha256",
+  "unit_sha256",
+}
 
 def sha256_bytes(data: bytes)->str:
     return hashlib.sha256(data).hexdigest()
@@ -25,6 +44,12 @@ def sha256_file(path: Path)->str:
     with path.open("rb") as f:
         for chunk in iter(lambda:f.read(1024*1024),b""): h.update(chunk)
     return h.hexdigest()
+
+def canonical_json_bytes(value)->bytes:
+    return json.dumps(value, sort_keys=True, separators=(",",":"), ensure_ascii=False).encode("utf-8")
+
+def receipt_digest(receipt:dict)->str:
+    return sha256_bytes(canonical_json_bytes(receipt))
 
 def artifact_digest(root: Path)->str:
     if not root.is_dir(): raise ValueError("artifact directory missing")
@@ -48,19 +73,38 @@ def validate_public_artifact(root: Path)->str:
 
 def load_request(path: Path)->dict:
     data=json.loads(path.read_text())
-    if data.get("schema")!=1: raise ValueError("unsupported request schema")
+    if data.get("schema")!=2: raise ValueError("unsupported request schema")
     if data.get("source_repo")!="ewgenij87snwork/yevgeniy-sorokin": raise ValueError("wrong source repo")
     if not HEX40.fullmatch(data.get("source_head","")): raise ValueError("invalid source_head")
     if not HEX40.fullmatch(data.get("source_tree","")): raise ValueError("invalid source_tree")
     cloud=data.get("gpt_cloud") or {}
-    if cloud.get("status")!="PASS": raise ValueError("GPT cloud status is not PASS")
-    if not HEX64.fullmatch(cloud.get("receipt_sha256","")): raise ValueError("invalid receipt digest")
-    if cloud.get("gates")!=REQUIRED_GATES: raise ValueError("required GPT cloud gate matrix incomplete")
-    finished=cloud.get("finished_at_epoch")
-    if not isinstance(finished,int) or finished<=0: raise ValueError("invalid finished_at_epoch")
-    max_age=cloud.get("max_age_seconds",14400)
+    receipt=cloud.get("receipt")
+    if not isinstance(receipt,dict): raise ValueError("GPT cloud receipt missing")
+    supplied=cloud.get("receipt_sha256","")
+    if not HEX64.fullmatch(supplied): raise ValueError("invalid receipt digest")
+    actual=receipt_digest(receipt)
+    if actual!=supplied: raise ValueError("GPT cloud receipt digest mismatch")
+    if receipt.get("schema")!=1: raise ValueError("unsupported GPT cloud receipt schema")
+    subject=receipt.get("subject") or {}
+    if subject!={"repo":data["source_repo"],"head":data["source_head"],"tree":data["source_tree"]}:
+        raise ValueError("GPT cloud receipt subject mismatch")
+    if receipt.get("status")!="PASS": raise ValueError("GPT cloud status is not PASS")
+    if receipt.get("gates")!=REQUIRED_GATES: raise ValueError("required GPT cloud gate matrix incomplete")
+    if receipt.get("toolchain")!=REQUIRED_TOOLCHAIN: raise ValueError("GPT cloud toolchain mismatch")
+    evidence=receipt.get("evidence")
+    if not isinstance(evidence,dict) or set(evidence)!=REQUIRED_EVIDENCE_KEYS:
+        raise ValueError("GPT cloud evidence set incomplete")
+    if any(not isinstance(v,str) or not HEX64.fullmatch(v) for v in evidence.values()):
+        raise ValueError("GPT cloud evidence digest invalid")
+    started=receipt.get("started_at_epoch")
+    finished=receipt.get("finished_at_epoch")
+    max_age=receipt.get("max_age_seconds",14400)
+    if not isinstance(started,int) or started<=0: raise ValueError("invalid started_at_epoch")
+    if not isinstance(finished,int) or finished<started: raise ValueError("invalid finished_at_epoch")
     if not isinstance(max_age,int) or max_age<1 or max_age>86400: raise ValueError("invalid max_age_seconds")
-    if int(time.time())-finished>max_age: raise ValueError("GPT cloud receipt is stale")
+    now=int(time.time())
+    if finished>now+300: raise ValueError("GPT cloud receipt finish time is in the future")
+    if now-finished>max_age: raise ValueError("GPT cloud receipt is stale")
     return data
 
 def verify_identity(req:dict, expected_head:str, expected_tree:str)->None:
@@ -70,7 +114,7 @@ def verify_identity(req:dict, expected_head:str, expected_tree:str)->None:
 def write_manifest(req:dict, artifact:Path, output:Path)->dict:
     digest=validate_public_artifact(artifact)
     manifest={
-      "schema":1,
+      "schema":2,
       "source_repo":req["source_repo"],
       "source_head":req["source_head"],
       "source_tree":req["source_tree"],
@@ -82,7 +126,7 @@ def write_manifest(req:dict, artifact:Path, output:Path)->dict:
 
 def verify_manifest(manifest_path:Path, artifact:Path, expected_head:str)->dict:
     m=json.loads(manifest_path.read_text())
-    if m.get("schema")!=1: raise ValueError("bad manifest schema")
+    if m.get("schema")!=2: raise ValueError("bad manifest schema")
     if m.get("source_head")!=expected_head: raise ValueError("deploy/source mismatch")
     digest=validate_public_artifact(artifact)
     if m.get("artifact_sha256")!=digest: raise ValueError("artifact digest mismatch")
