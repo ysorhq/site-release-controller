@@ -1,0 +1,151 @@
+name: Build GPT Cloud bootstrap bundle
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact private source commit SHA
+        required: true
+        type: string
+      source_tree:
+        description: Exact private source tree SHA
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gpt-cloud-bootstrap-${{ inputs.source_sha }}
+  cancel-in-progress: false
+
+jobs:
+  bundle:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: source-read
+    steps:
+      - name: Checkout trusted controller main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Validate exact inputs
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          SOURCE_TREE: ${{ inputs.source_tree }}
+        run: |
+          set -euo pipefail
+          [[ "${SOURCE_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${SOURCE_TREE}" =~ ^[0-9a-f]{40}$ ]]
+
+      - name: Mint short-lived read-only source token
+        id: source-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.PRIVATE_SOURCE_APP_ID }}
+          private-key: ${{ secrets.PRIVATE_SOURCE_APP_PRIVATE_KEY }}
+          owner: ewgenij87snwork
+          repositories: yevgeniy-sorokin
+          permission-contents: read
+
+      - name: Checkout exact private source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ewgenij87snwork/yevgeniy-sorokin
+          ref: ${{ inputs.source_sha }}
+          token: ${{ steps.source-token.outputs.token }}
+          persist-credentials: false
+          fetch-depth: 1
+          path: source
+
+      - name: Verify exact private identity
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          SOURCE_TREE: ${{ inputs.source_tree }}
+        run: |
+          set -euo pipefail
+          test "$(git -C source rev-parse HEAD)" = "${SOURCE_SHA}"
+          test "$(git -C source rev-parse 'HEAD^{tree}')" = "${SOURCE_TREE}"
+
+      - name: Use exact Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "24.21.0"
+          package-manager-cache: false
+
+      - name: Populate exact npm cache without project lifecycle scripts
+        working-directory: source
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm cache verify
+
+      - name: Populate exact Playwright Chromium cache
+        working-directory: source
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/ms-playwright
+        run: |
+          set -euo pipefail
+          npx playwright install chromium
+
+      - name: Build source-free content-addressed bundle
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          SOURCE_TREE: ${{ inputs.source_tree }}
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/ms-playwright
+        run: |
+          set -euo pipefail
+          out="${RUNNER_TEMP}/gpt-cloud-bootstrap"
+          mkdir -p "${out}/payload/node" "${out}/payload/npm-cache" "${out}/payload/ms-playwright"
+          node_root="$(dirname "$(dirname "$(command -v node)")")"
+          cp -a "${node_root}/." "${out}/payload/node/"
+          cp -a "${HOME}/.npm/." "${out}/payload/npm-cache/"
+          cp -a "${PLAYWRIGHT_BROWSERS_PATH}/." "${out}/payload/ms-playwright/"
+          lock_sha="$(sha256sum source/package-lock.json | awk '{print $1}')"
+          package_sha="$(sha256sum source/package.json | awk '{print $1}')"
+          node_ver="$(node --version)"
+          npm_ver="$(npm --version)"
+          pw_ver="$(node -p "require('./source/node_modules/@playwright/test/package.json').version")"
+          cat > "${out}/manifest.json" <<EOF
+          {
+            "schema": 1,
+            "source_repo": "ewgenij87snwork/yevgeniy-sorokin",
+            "source_head": "${SOURCE_SHA}",
+            "source_tree": "${SOURCE_TREE}",
+            "package_lock_sha256": "${lock_sha}",
+            "package_json_sha256": "${package_sha}",
+            "node_version": "${node_ver}",
+            "npm_version": "${npm_ver}",
+            "playwright_version": "${pw_ver}",
+            "platform": "linux-x64",
+            "contents": ["node", "npm-cache", "ms-playwright"]
+          }
+          EOF
+          tar -C "${out}" -czf "${RUNNER_TEMP}/gpt-cloud-bootstrap.tgz" manifest.json payload
+          sha256sum "${RUNNER_TEMP}/gpt-cloud-bootstrap.tgz" > "${RUNNER_TEMP}/gpt-cloud-bootstrap.tgz.sha256"
+          test ! -e "${out}/payload/source"
+          test ! -e "${out}/payload/.git"
+          echo "bundle_sha256=$(cut -d' ' -f1 "${RUNNER_TEMP}/gpt-cloud-bootstrap.tgz.sha256")" >> "${GITHUB_ENV}"
+
+      - name: Delete private source before artifact upload
+        shell: bash
+        run: rm -rf source
+
+      - name: Upload bootstrap bytes only
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: gpt-cloud-bootstrap-${{ inputs.source_sha }}
+          path: |
+            ${{ runner.temp }}/gpt-cloud-bootstrap.tgz
+            ${{ runner.temp }}/gpt-cloud-bootstrap.tgz.sha256
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Report digest only
+        shell: bash
+        run: echo "GPT cloud bootstrap SHA-256 ${bundle_sha256}"
