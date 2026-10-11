@@ -23,20 +23,19 @@ The source-reader GitHub App must be installed only on `ewgenij87snwork/yevgeniy
 
 ## Workflow maintenance
 
-Normal PRs cannot mutate `.github/workflows/**`.
+Normal PRs cannot mutate the protected controller surface.
 
-Future workflow maintenance is content-addressed:
-1. prepare the workflow-change PR and freeze its exact HEAD;
-2. let the trusted workflow-surface gate report the exact candidate workflow snapshot digest and changed paths;
-3. merge a separate non-workflow authorization entry into `maintenance/workflow-authorizations.json` on trusted `main`;
-4. rerun the maintenance PR; the gate reads only trusted-main authorization and accepts only the exact authorized HEAD + protected-surface digest + changed paths;
-5. any push changes the HEAD/digest and fails closed.
+Maintenance authorization is carried by an exact GitHub PR Conversation comment from `ewgenij87snwork`, not by a commit in `main`. The trusted-base gate accepts only a two-line comment: first `CONTROLLER_MAINTENANCE_V1`, then one compact JSON object binding exact `head_sha`, exact `protected_surface_sha256`, exact sorted `changed_paths`, an `expires_at_epoch` no more than four hours ahead, and a non-empty `reason`.
 
-After this bootstrap transition, normal workflow maintenance no longer requires disabling repository rules.
+Because authorization lives outside the candidate branch and does not mutate `main`, strict up-to-date required checks remain enabled. Any candidate push changes the HEAD and invalidates the authorization immediately. Candidate code receives no write-capable token and cannot create its own trusted authorization comment.
+
+Protected controller surface includes every file under `.github/workflows/**` plus `controller/workflow_surface_gate.py` and `controller/release_controller.py`.
 
 ## GPT Cloud bootstrap bundle
 
-`.github/workflows/gpt-cloud-bootstrap.yml` prepares bytes; it is not CI and cannot mint a CI PASS. It runs only from protected `main` with `source-read`, verifies exact private HEAD/tree, runs `npm ci --ignore-scripts` only to populate dependency bytes, downloads the pinned Playwright Chromium runtime, packages exact Node/npm-cache/browser bytes, deletes private source, and uploads only the source-free archive plus digest. GPT cloud independently verifies and consumes that bundle offline.
+`.github/workflows/gpt-cloud-bootstrap.yml` prepares bytes; it is not CI and cannot mint a CI PASS. It runs only from protected `main` with `source-read`, verifies exact private HEAD/tree through the GitHub API, retains only package metadata long enough to populate dependency bytes, revokes the source token before package execution, downloads the pinned Playwright Chromium runtime, and uploads only the source-free Node/npm-cache/browser archive plus digest. GPT cloud independently verifies and consumes that bundle offline.
 
 
-Protected controller surface includes every file under `.github/workflows/**` plus `controller/workflow_surface_gate.py` and `controller/release_controller.py`. The authorization registry itself is deliberately outside that digest so a separate non-workflow trusted-main PR can authorize an exact frozen maintenance candidate.
+### Bootstrap v2 trust boundary
+
+Bootstrap v2 never checks out the private repository. A short-lived read-only App token is exposed only to one trusted metadata-fetch shell step, which verifies the exact commit/tree and downloads only root `package.json` plus `package-lock.json`, then revokes the token. Dependency installation uses `npm ci --ignore-scripts` only after token revocation. The package metadata files are removed before Playwright package code is executed. The uploaded artifact contains only exact Node runtime bytes, npm cache content-addressed bytes, Playwright Chromium runtime bytes, a manifest and SHA-256; no private source or Git metadata.
