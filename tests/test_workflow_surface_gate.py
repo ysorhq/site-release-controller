@@ -9,70 +9,79 @@ HEAD="a"*40
 class Tests(unittest.TestCase):
     def setup_roots(self):
         td=tempfile.TemporaryDirectory(); root=Path(td.name)
-        trusted=root/"trusted"; candidate=root/"candidate"
+        trusted=root/"trusted"; candidate=root/"candidate"; comments=root/"comments.json"
         for r in [trusted,candidate]:
             (r/".github/workflows").mkdir(parents=True)
-            (r/"maintenance").mkdir()
             (r/"controller").mkdir()
             (r/".github/workflows/base.yml").write_text("name: base\n")
             (r/"controller/workflow_surface_gate.py").write_text("gate\n")
             (r/"controller/release_controller.py").write_text("release\n")
-            (r/"maintenance/workflow-authorizations.json").write_text('{"schema":2,"authorizations":[]}\n')
-        return td,trusted,candidate
-    def authorize_exact(self,t,c,head=HEAD,expires=None):
+        comments.write_text("[]\n")
+        return td,trusted,candidate,comments
+    def comment(self,t,c,path,head=HEAD,expires=None,login="ewgenij87snwork"):
         _,dig=wg.protected_surface_snapshot(c)
         paths=wg.changed_paths(wg.protected_surface_snapshot(t)[0],wg.protected_surface_snapshot(c)[0])
-        reg={"schema":2,"authorizations":[{
-          "head_sha":head,
-          "protected_surface_sha256":dig,
-          "changed_paths":paths,
+        data={
+          "head_sha":head,"protected_surface_sha256":dig,"changed_paths":paths,
           "expires_at_epoch":int(time.time())+3600 if expires is None else expires,
           "reason":"test"
-        }]}
-        (t/"maintenance/workflow-authorizations.json").write_text(json.dumps(reg))
+        }
+        path.write_text(json.dumps([{"user":{"login":login},"body":wg.AUTH_MARKER+"\n"+json.dumps(data)}]))
     def test_unchanged(self):
-        td,t,c=self.setup_roots()
-        try:self.assertEqual(wg.authorize(t,c,HEAD)["mode"],"unchanged")
+        td,t,c,p=self.setup_roots()
+        try:self.assertEqual(wg.authorize(t,c,HEAD,p)["mode"],"unchanged")
         finally:td.cleanup()
     def test_unauthorized_workflow_change_blocks(self):
-        td,t,c=self.setup_roots(); (c/".github/workflows/new.yml").write_text("name: new\n")
+        td,t,c,p=self.setup_roots(); (c/".github/workflows/new.yml").write_text("name: new\n")
         try:
-            with self.assertRaises(ValueError): wg.authorize(t,c,HEAD)
+            with self.assertRaises(ValueError): wg.authorize(t,c,HEAD,p)
         finally:td.cleanup()
     def test_unauthorized_gate_script_change_blocks(self):
-        td,t,c=self.setup_roots(); (c/"controller/workflow_surface_gate.py").write_text("tampered\n")
+        td,t,c,p=self.setup_roots(); (c/"controller/workflow_surface_gate.py").write_text("tampered\n")
         try:
-            with self.assertRaises(ValueError): wg.authorize(t,c,HEAD)
+            with self.assertRaises(ValueError): wg.authorize(t,c,HEAD,p)
         finally:td.cleanup()
     def test_unauthorized_release_controller_change_blocks(self):
-        td,t,c=self.setup_roots(); (c/"controller/release_controller.py").write_text("tampered\n")
+        td,t,c,p=self.setup_roots(); (c/"controller/release_controller.py").write_text("tampered\n")
         try:
-            with self.assertRaises(ValueError): wg.authorize(t,c,HEAD)
+            with self.assertRaises(ValueError): wg.authorize(t,c,HEAD,p)
         finally:td.cleanup()
-    def test_exact_authorization_passes(self):
-        td,t,c=self.setup_roots(); (c/".github/workflows/new.yml").write_text("name: new\n")
+    def test_exact_owner_comment_passes(self):
+        td,t,c,p=self.setup_roots(); (c/".github/workflows/new.yml").write_text("name: new\n")
         try:
-            self.authorize_exact(t,c)
-            self.assertEqual(wg.authorize(t,c,HEAD)["mode"],"authorized")
+            self.comment(t,c,p)
+            self.assertEqual(wg.authorize(t,c,HEAD,p)["mode"],"authorized")
+        finally:td.cleanup()
+    def test_wrong_author_commenter_blocks(self):
+        td,t,c,p=self.setup_roots(); (c/".github/workflows/new.yml").write_text("name: new\n")
+        try:
+            self.comment(t,c,p,login="someone-else")
+            with self.assertRaises(ValueError): wg.authorize(t,c,HEAD,p)
         finally:td.cleanup()
     def test_wrong_head_blocks(self):
-        td,t,c=self.setup_roots(); (c/".github/workflows/new.yml").write_text("name: new\n")
+        td,t,c,p=self.setup_roots(); (c/".github/workflows/new.yml").write_text("name: new\n")
         try:
-            self.authorize_exact(t,c,head="b"*40)
-            with self.assertRaises(ValueError): wg.authorize(t,c,HEAD)
+            self.comment(t,c,p,head="b"*40)
+            with self.assertRaises(ValueError): wg.authorize(t,c,HEAD,p)
         finally:td.cleanup()
     def test_digest_drift_blocks(self):
-        td,t,c=self.setup_roots(); (c/".github/workflows/new.yml").write_text("name: new\n")
+        td,t,c,p=self.setup_roots(); (c/".github/workflows/new.yml").write_text("name: new\n")
         try:
-            self.authorize_exact(t,c)
+            self.comment(t,c,p)
             (c/".github/workflows/new.yml").write_text("name: changed\n")
-            with self.assertRaises(ValueError): wg.authorize(t,c,HEAD)
+            with self.assertRaises(ValueError): wg.authorize(t,c,HEAD,p)
         finally:td.cleanup()
     def test_expired_blocks(self):
-        td,t,c=self.setup_roots(); (c/".github/workflows/new.yml").write_text("name: new\n")
+        td,t,c,p=self.setup_roots(); (c/".github/workflows/new.yml").write_text("name: new\n")
         try:
-            self.authorize_exact(t,c,expires=1)
-            with self.assertRaises(ValueError): wg.authorize(t,c,HEAD,now=2)
+            self.comment(t,c,p,expires=1)
+            with self.assertRaises(ValueError): wg.authorize(t,c,HEAD,p,now=2)
+        finally:td.cleanup()
+    def test_excessive_lifetime_blocks(self):
+        td,t,c,p=self.setup_roots(); (c/".github/workflows/new.yml").write_text("name: new\n")
+        try:
+            self.comment(t,c,p,expires=100000)
+            with self.assertRaises(ValueError): wg.authorize(t,c,HEAD,p,now=1)
         finally:td.cleanup()
 
 if __name__=="__main__": unittest.main(verbosity=2)
