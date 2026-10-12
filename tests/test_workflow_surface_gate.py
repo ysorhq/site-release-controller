@@ -51,6 +51,18 @@ class Tests(unittest.TestCase):
         try:
             with self.assertRaises(ValueError): wg.authorize(t,c,HEAD,p)
         finally:td.cleanup()
+    def test_unauthorized_bootstrap_request_change_blocks(self):
+        td,t,c,p=self.setup_roots(); (c/"bootstrap-requests/current.json").write_text('{"changed":true}\n')
+        try:
+            with self.assertRaises(ValueError): wg.authorize(t,c,HEAD,p)
+        finally:td.cleanup()
+
+    def test_unauthorized_network_request_change_blocks(self):
+        td,t,c,p=self.setup_roots(); (c/"network-requests/current.json").write_text('{"changed":true}\n')
+        try:
+            with self.assertRaises(ValueError): wg.authorize(t,c,HEAD,p)
+        finally:td.cleanup()
+
     def test_exact_owner_comment_passes(self):
         td,t,c,p=self.setup_roots(); (c/".github/workflows/new.yml").write_text("name: new\n")
         try:
