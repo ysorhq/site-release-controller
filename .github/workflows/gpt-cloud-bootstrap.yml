@@ -69,6 +69,8 @@ jobs:
             if [ "${SOURCE_BRIDGE_ENABLED:-}" = "true" ] || [ -f "${RUNNER_TEMP}/source-recipient.crt" ]; then
               openssl x509 -in "${RUNNER_TEMP}/source-recipient.crt" -noout -checkend 60
               recipient_sha="$(openssl x509 -in "${RUNNER_TEMP}/source-recipient.crt" -outform DER | sha256sum | awk '{print $1}')"
+              trusted_recipient_sha="$(openssl x509 -in bootstrap-requests/transport-public.pem -outform DER | sha256sum | awk '{print $1}')"
+              test "${recipient_sha}" = "${trusted_recipient_sha}"
               echo "SOURCE_RECIPIENT_CERT_SHA256=${recipient_sha}" >> "${GITHUB_ENV}"
             fi
           else
