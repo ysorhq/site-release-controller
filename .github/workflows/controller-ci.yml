@@ -51,4 +51,4 @@ jobs:
         run: |
           set -euo pipefail
           cd "${CANDIDATE_ROOT}"
-          python3 -m unittest -v tests/test_release_controller.py
+          python3 -m unittest -v tests/test_release_controller.py tests/test_workflow_surface_gate.py
