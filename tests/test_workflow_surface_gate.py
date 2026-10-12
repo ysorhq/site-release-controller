@@ -13,9 +13,14 @@ class Tests(unittest.TestCase):
         for r in [trusted,candidate]:
             (r/".github/workflows").mkdir(parents=True)
             (r/"controller").mkdir()
+            (r/"bootstrap-requests").mkdir()
+            (r/"network-requests").mkdir()
             (r/".github/workflows/base.yml").write_text("name: base\n")
             (r/"controller/workflow_surface_gate.py").write_text("gate\n")
             (r/"controller/release_controller.py").write_text("release\n")
+            (r/"bootstrap-requests/transport-public.pem").write_text("cert\n")
+            (r/"bootstrap-requests/current.json").write_text("{}\n")
+            (r/"network-requests/current.json").write_text("{}\n")
         comments.write_text("[]\n")
         return td,trusted,candidate,comments
     def comment(self,t,c,path,head=HEAD,expires=None,login="ewgenij87snwork"):
@@ -46,6 +51,20 @@ class Tests(unittest.TestCase):
         try:
             with self.assertRaises(ValueError): wg.authorize(t,c,HEAD,p)
         finally:td.cleanup()
+    def test_unauthorized_bootstrap_request_change_blocks(self):
+        td,t,c,p=self.setup_roots()
+        (c/"bootstrap-requests/current.json").write_text('{"changed":true}\n')
+        try:
+            with self.assertRaises(ValueError): wg.authorize(t,c,HEAD,p)
+        finally: td.cleanup()
+
+    def test_unauthorized_network_request_change_blocks(self):
+        td,t,c,p=self.setup_roots()
+        (c/"network-requests/current.json").write_text('{"changed":true}\n')
+        try:
+            with self.assertRaises(ValueError): wg.authorize(t,c,HEAD,p)
+        finally: td.cleanup()
+
     def test_exact_owner_comment_passes(self):
         td,t,c,p=self.setup_roots(); (c/".github/workflows/new.yml").write_text("name: new\n")
         try:
