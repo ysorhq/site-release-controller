@@ -47,6 +47,8 @@ jobs:
           PY
           openssl x509 -in "${RUNNER_TEMP}/recipient.crt" -noout -checkend 60
           cert_sha="$(openssl x509 -in "${RUNNER_TEMP}/recipient.crt" -outform DER | sha256sum | awk '{print $1}')"
+          trusted_cert_sha="$(openssl x509 -in bootstrap-requests/transport-public.pem -outform DER | sha256sum | awk '{print $1}')"
+          test "${cert_sha}" = "${trusted_cert_sha}"
           echo "RECIPIENT_CERT_SHA256=${cert_sha}" >> "${GITHUB_ENV}"
 
       - name: Mint short-lived read-only observation token
