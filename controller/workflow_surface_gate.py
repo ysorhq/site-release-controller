@@ -6,6 +6,8 @@ FIXED_PROTECTED_PATHS=(
     "controller/workflow_surface_gate.py",
     "controller/release_controller.py",
     "bootstrap-requests/transport-public.pem",
+    "bootstrap-requests/current.json",
+    "network-requests/current.json",
 )
 AUTH_MARKER="CONTROLLER_MAINTENANCE_V1"
 AUTHORIZER_LOGIN="ewgenij87snwork"
