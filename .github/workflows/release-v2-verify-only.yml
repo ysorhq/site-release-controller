@@ -1,4 +1,4 @@
-name: Release v2 verify-only (isolated candidate)
+name: Release v2 CANARY ONLY (isolated candidate)
 
 on:
   push:
@@ -16,7 +16,7 @@ on:
         type: string
         required: true
       gpt_receipt_sha256:
-        description: Exact GPT-cloud receipt digest; not a trust root
+        description: BLOCKED GPT-cloud canary digest; NOT a CI PASS or release permission
         type: string
         required: true
 
