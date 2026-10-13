@@ -107,27 +107,35 @@ jobs:
           owner: ewgenij87snwork
           repositories: yevgeniy-sorokin
           permission-contents: read
-          skip-token-revoke: true
+          skip-token-revoke: false
 
-      - name: Check exact current private PR39 candidate
+      - name: Verify exact PR39 source ref and Git tree with Contents read ONLY
         env:
           GH_SOURCE_TOKEN: ${{ steps.source-token.outputs.token }}
           SOURCE_SHA: ${{ needs.resolve.outputs.source_sha }}
+          SOURCE_TREE: ${{ needs.resolve.outputs.source_tree }}
         run: |
           set -euo pipefail
           curl --fail --silent --show-error \
             -H "Authorization: Bearer ${GH_SOURCE_TOKEN}" \
             -H "Accept: application/vnd.github+json" \
-            https://api.github.com/repos/ewgenij87snwork/yevgeniy-sorokin/pulls/39 \
-            -o "${RUNNER_TEMP}/site-pr.json"
+            "https://api.github.com/repos/ewgenij87snwork/yevgeniy-sorokin/git/ref/heads/migration/nuxt5-nitro3-audited-ssg-20261010" \
+            -o "${RUNNER_TEMP}/source-ref.json"
+          curl --fail --silent --show-error \
+            -H "Authorization: Bearer ${GH_SOURCE_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/ewgenij87snwork/yevgeniy-sorokin/git/commits/${SOURCE_SHA}" \
+            -o "${RUNNER_TEMP}/source-commit.json"
           python3 - <<'PY'
           import json,os
-          p=json.load(open(os.environ['RUNNER_TEMP']+'/site-pr.json'))
-          assert p['state']=='open' and p['draft'] is True
-          assert p['head']['sha']==os.environ['SOURCE_SHA']
-          assert p['base']['ref']=='main'
+          root=os.environ['RUNNER_TEMP']
+          ref=json.load(open(root+'/source-ref.json'))
+          commit=json.load(open(root+'/source-commit.json'))
+          assert ref['object']['sha']==os.environ['SOURCE_SHA'], 'remote task branch drift'
+          assert commit['sha']==os.environ['SOURCE_SHA'], 'wrong commit'
+          assert commit['tree']['sha']==os.environ['SOURCE_TREE'], 'wrong tree'
           PY
-          rm -f "${RUNNER_TEMP}/site-pr.json"
+          rm -f "${RUNNER_TEMP}/source-ref.json" "${RUNNER_TEMP}/source-commit.json"
 
       - name: Fetch immutable private source with no persisted credentials
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
