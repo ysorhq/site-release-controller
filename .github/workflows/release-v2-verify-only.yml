@@ -1,0 +1,223 @@
+name: Release v2 verify-only (isolated candidate)
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact private Site PR39 HEAD
+        type: string
+        required: true
+      source_tree:
+        description: Exact private Site tree
+        type: string
+        required: true
+      gpt_receipt_sha256:
+        description: Exact GPT-cloud receipt digest; not a trust root
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-v2-verify-only-${{ inputs.source_sha }}
+  cancel-in-progress: false
+
+jobs:
+  candidate-sandbox:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    environment: source-read
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout protected controller code only
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Validate input identity and negative tests
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          SOURCE_TREE: ${{ inputs.source_tree }}
+          GPT_DIGEST: ${{ inputs.gpt_receipt_sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "${SOURCE_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${SOURCE_TREE}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${GPT_DIGEST}" =~ ^[0-9a-f]{64}$ ]]
+          python3 -m unittest -v tests.test_release_v2
+
+      - name: Mint short-lived read-only source token
+        id: source-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.PRIVATE_SOURCE_APP_ID }}
+          private-key: ${{ secrets.PRIVATE_SOURCE_APP_PRIVATE_KEY }}
+          owner: ewgenij87snwork
+          repositories: yevgeniy-sorokin
+          permission-contents: read
+          skip-token-revoke: true
+
+      - name: Check exact current private PR39 candidate
+        env:
+          GH_SOURCE_TOKEN: ${{ steps.source-token.outputs.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error \
+            -H "Authorization: Bearer ${GH_SOURCE_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/ewgenij87snwork/yevgeniy-sorokin/pulls/39 \
+            -o "${RUNNER_TEMP}/site-pr.json"
+          python3 - <<'PY'
+          import json,os
+          p=json.load(open(os.environ['RUNNER_TEMP']+'/site-pr.json'))
+          assert p['state']=='open' and p['draft'] is True
+          assert p['head']['sha']==os.environ['SOURCE_SHA']
+          assert p['base']['ref']=='main'
+          PY
+          rm -f "${RUNNER_TEMP}/site-pr.json"
+
+      - name: Fetch immutable private source with no persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ewgenij87snwork/yevgeniy-sorokin
+          ref: ${{ inputs.source_sha }}
+          token: ${{ steps.source-token.outputs.token }}
+          persist-credentials: false
+          fetch-depth: 1
+          path: private-source
+
+      - name: Verify head/tree and REVOKE token before any candidate execution
+        env:
+          GH_SOURCE_TOKEN: ${{ steps.source-token.outputs.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          SOURCE_TREE: ${{ inputs.source_tree }}
+        run: |
+          set -euo pipefail
+          trap 'curl -fsS -X DELETE -H "Authorization: Bearer ${GH_SOURCE_TOKEN}" https://api.github.com/installation/token >/dev/null || true' EXIT
+          test "$(git -C private-source rev-parse HEAD)" = "${SOURCE_SHA}"
+          test "$(git -C private-source rev-parse 'HEAD^{tree}')" = "${SOURCE_TREE}"
+          if git -C private-source config --get-regexp 'http\..*extraheader'; then exit 1; fi
+          curl --fail --silent --show-error -X DELETE \
+            -H "Authorization: Bearer ${GH_SOURCE_TOKEN}" \
+            https://api.github.com/installation/token >/dev/null
+          trap - EXIT
+          echo 'PASS: exact candidate; private App token revoked.'
+
+      - name: Install Node 24.21.0 from trusted action
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '24.21.0'
+          package-manager-cache: false
+
+      - name: Fetch dependencies without running candidate lifecycle scripts
+        working-directory: private-source
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Prove no token, controller mount, socket or network in sandbox
+        run: |
+          set -euo pipefail
+          docker run --rm --pull=always --network none --cap-drop ALL \
+            --security-opt no-new-privileges --read-only --pids-limit 128 \
+            --memory 512m --tmpfs /tmp:rw,nosuid,nodev,size=128m \
+            node:24.21.0-bookworm-slim@sha256:5cbc7caba8c2c0f0bca675d1b61b9f2857e1cf1853c6164ee9dd409501a936e7 sh -c '
+              test -z "${GITHUB_TOKEN:-}" &&
+              test -z "${GH_SOURCE_TOKEN:-}" &&
+              test ! -e /trusted-controller &&
+              test ! -e /var/run/docker.sock &&
+              node -e "const s=require(\"node:net\").connect(443,\"1.1.1.1\");s.on(\"connect\",()=>process.exit(1));s.on(\"error\",()=>process.exit(0));setTimeout(()=>process.exit(1),1500)"
+            '
+
+      - name: Run untrusted build INSIDE read-only-rootfs networkless container
+        env:
+          WEBMCP_ORIGIN_TRIAL_TOKEN: ${{ vars.WEBMCP_ORIGIN_TRIAL_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "${WEBMCP_ORIGIN_TRIAL_TOKEN}"
+          test "$(node --version)" = v24.21.0
+          mkdir -p "${RUNNER_TEMP}/sandbox-work"
+          cp -a private-source/. "${RUNNER_TEMP}/sandbox-work/"
+          docker run --rm --network none --cap-drop ALL \
+            --security-opt no-new-privileges --read-only --pids-limit 512 \
+            --memory 6g --cpus 2 --user "$(id -u):$(id -g)" \
+            --tmpfs /tmp:rw,nosuid,nodev,size=512m \
+            --env HOME=/tmp --env WEBMCP_ORIGIN_TRIAL_TOKEN \
+            --mount "type=bind,src=${RUNNER_TEMP}/sandbox-work,dst=/work" \
+            --workdir /work \
+            node:24.21.0-bookworm-slim@sha256:5cbc7caba8c2c0f0bca675d1b61b9f2857e1cf1853c6164ee9dd409501a936e7 \
+            bash -euo pipefail -c '
+              test "$(node --version)" = v24.21.0
+              node scripts/verify-release-gates-selftest.mjs
+              node scripts/verify-release-gates.mjs
+              node scripts/compile-semantic.mjs --check
+              node scripts/validate-semantic-contract.mjs
+              npm run typecheck
+              npm test
+              bash scripts/prepare-site.sh
+              node scripts/apply-webmcp-origin-trial.mjs .site/_headers
+              node scripts/apply-public-security-headers-selftest.mjs
+              node scripts/apply-public-security-headers.mjs .site
+              CHECK_PACKAGED_SITE=1 node scripts/validate-knowledge.mjs
+              WEBMCP_TEST_ROOT=.site node scripts/validate-webmcp-runtime.mjs
+              node scripts/audit-public-quality.mjs .site
+              npm run audit:exposure
+              npm run audit:candidate-headers
+              npm run audit:security
+            '
+
+      - name: Trusted host packages ONLY validated public static artifact
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          SOURCE_TREE: ${{ inputs.source_tree }}
+          GPT_DIGEST: ${{ inputs.gpt_receipt_sha256 }}
+        run: |
+          set -euo pipefail
+          mkdir -p candidate-bundle
+          cp -a "${RUNNER_TEMP}/sandbox-work/.site" candidate-bundle/.site
+          python3 controller/release_v2.py --create \
+            --artifact candidate-bundle/.site --manifest candidate-bundle/manifest.json \
+            --head "${SOURCE_SHA}" --tree "${SOURCE_TREE}" --gpt-receipt-sha256 "${GPT_DIGEST}"
+          rm -rf private-source "${RUNNER_TEMP}/sandbox-work"
+          test ! -e private-source
+
+      - name: Upload only public static .site and trusted manifest
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: release-v2-verify-only-${{ inputs.source_sha }}
+          path: candidate-bundle/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
+
+  trusted-verify:
+    needs: candidate-sandbox
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout protected verifier independently
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Independent negative tests
+        run: python3 -m unittest -v tests.test_release_v2
+      - name: Download public artifact from prior job only
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: release-v2-verify-only-${{ inputs.source_sha }}
+          path: verified
+      - name: Trusted verification after isolated process/job boundary
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          SOURCE_TREE: ${{ inputs.source_tree }}
+          GPT_DIGEST: ${{ inputs.gpt_receipt_sha256 }}
+        run: |
+          set -euo pipefail
+          python3 controller/release_v2.py \
+            --artifact verified/.site --manifest verified/manifest.json \
+            --head "${SOURCE_SHA}" --tree "${SOURCE_TREE}" --gpt-receipt-sha256 "${GPT_DIGEST}"
+          echo 'VERIFY_ONLY_PASS: no deploy job, production Environment or Cloudflare credential.'
