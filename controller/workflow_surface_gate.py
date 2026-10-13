@@ -7,6 +7,7 @@ FIXED_PROTECTED_PATHS=(
     "controller/release_controller.py",
     "controller/release_v2.py",
     "tests/test_release_v2.py",
+    "requests/verify-only-current.json",
     "bootstrap-requests/transport-public.pem",
     "bootstrap-requests/current.json",
     "network-requests/current.json",

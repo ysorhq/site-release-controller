@@ -1,6 +1,10 @@
 name: Release v2 verify-only (isolated candidate)
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - requests/verify-only-current.json
   workflow_dispatch:
     inputs:
       source_sha:
@@ -20,11 +24,56 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-v2-verify-only-${{ inputs.source_sha }}
+  group: release-v2-verify-only-${{ github.run_id }}
   cancel-in-progress: false
 
 jobs:
+  resolve:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      source_sha: ${{ steps.values.outputs.source_sha }}
+      source_tree: ${{ steps.values.outputs.source_tree }}
+      gpt_receipt_sha256: ${{ steps.values.outputs.gpt_receipt_sha256 }}
+    steps:
+      - name: Read protected controller request only
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Freeze exact manual or protected-GitOps inputs
+        id: values
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          MANUAL_SOURCE_SHA: ${{ inputs.source_sha }}
+          MANUAL_SOURCE_TREE: ${{ inputs.source_tree }}
+          MANUAL_GPT_DIGEST: ${{ inputs.gpt_receipt_sha256 }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json,os,re
+          if os.environ['EVENT_NAME']=='push':
+              obj=json.load(open('requests/verify-only-current.json'))
+              assert obj.get('schema')==1
+              assert obj.get('mode')=='CANARY_VERIFY_ONLY_NO_RELEASE'
+              assert obj.get('gpt_ci_status')=='BLOCKED'
+              sha=obj['source_sha'];tree=obj['source_tree'];digest=obj['gpt_receipt_sha256']
+              print('Protected-GitOps CANARY_ONLY; not GPT PRIMARY CI PASS or release admission.')
+          else:
+              assert os.environ['EVENT_NAME']=='workflow_dispatch'
+              sha=os.environ['MANUAL_SOURCE_SHA']
+              tree=os.environ['MANUAL_SOURCE_TREE']
+              digest=os.environ['MANUAL_GPT_DIGEST']
+          assert re.fullmatch(r'[a-f0-9]{40}',sha)
+          assert re.fullmatch(r'[a-f0-9]{40}',tree)
+          assert re.fullmatch(r'[a-f0-9]{64}',digest)
+          with open(os.environ['GITHUB_OUTPUT'],'a') as out:
+              out.write(f'source_sha={sha}\nsource_tree={tree}\ngpt_receipt_sha256={digest}\n')
+          PY
   candidate-sandbox:
+    needs: resolve
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 40
@@ -39,9 +88,9 @@ jobs:
 
       - name: Validate input identity and negative tests
         env:
-          SOURCE_SHA: ${{ inputs.source_sha }}
-          SOURCE_TREE: ${{ inputs.source_tree }}
-          GPT_DIGEST: ${{ inputs.gpt_receipt_sha256 }}
+          SOURCE_SHA: ${{ needs.resolve.outputs.source_sha }}
+          SOURCE_TREE: ${{ needs.resolve.outputs.source_tree }}
+          GPT_DIGEST: ${{ needs.resolve.outputs.gpt_receipt_sha256 }}
         run: |
           set -euo pipefail
           [[ "${SOURCE_SHA}" =~ ^[0-9a-f]{40}$ ]]
@@ -63,7 +112,7 @@ jobs:
       - name: Check exact current private PR39 candidate
         env:
           GH_SOURCE_TOKEN: ${{ steps.source-token.outputs.token }}
-          SOURCE_SHA: ${{ inputs.source_sha }}
+          SOURCE_SHA: ${{ needs.resolve.outputs.source_sha }}
         run: |
           set -euo pipefail
           curl --fail --silent --show-error \
@@ -84,7 +133,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ewgenij87snwork/yevgeniy-sorokin
-          ref: ${{ inputs.source_sha }}
+          ref: ${{ needs.resolve.outputs.source_sha }}
           token: ${{ steps.source-token.outputs.token }}
           persist-credentials: false
           fetch-depth: 1
@@ -93,8 +142,8 @@ jobs:
       - name: Verify head/tree and REVOKE token before any candidate execution
         env:
           GH_SOURCE_TOKEN: ${{ steps.source-token.outputs.token }}
-          SOURCE_SHA: ${{ inputs.source_sha }}
-          SOURCE_TREE: ${{ inputs.source_tree }}
+          SOURCE_SHA: ${{ needs.resolve.outputs.source_sha }}
+          SOURCE_TREE: ${{ needs.resolve.outputs.source_tree }}
         run: |
           set -euo pipefail
           trap 'curl -fsS -X DELETE -H "Authorization: Bearer ${GH_SOURCE_TOKEN}" https://api.github.com/installation/token >/dev/null || true' EXIT
@@ -170,9 +219,9 @@ jobs:
 
       - name: Trusted host packages ONLY validated public static artifact
         env:
-          SOURCE_SHA: ${{ inputs.source_sha }}
-          SOURCE_TREE: ${{ inputs.source_tree }}
-          GPT_DIGEST: ${{ inputs.gpt_receipt_sha256 }}
+          SOURCE_SHA: ${{ needs.resolve.outputs.source_sha }}
+          SOURCE_TREE: ${{ needs.resolve.outputs.source_tree }}
+          GPT_DIGEST: ${{ needs.resolve.outputs.gpt_receipt_sha256 }}
         run: |
           set -euo pipefail
           mkdir -p candidate-bundle
@@ -186,14 +235,14 @@ jobs:
       - name: Upload only public static .site and trusted manifest
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: release-v2-verify-only-${{ inputs.source_sha }}
+          name: release-v2-verify-only-${{ needs.resolve.outputs.source_sha }}
           path: candidate-bundle/
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 1
 
   trusted-verify:
-    needs: candidate-sandbox
+    needs: [resolve, candidate-sandbox]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -208,16 +257,16 @@ jobs:
       - name: Download public artifact from prior job only
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
-          name: release-v2-verify-only-${{ inputs.source_sha }}
+          name: release-v2-verify-only-${{ needs.resolve.outputs.source_sha }}
           path: verified
       - name: Trusted verification after isolated process/job boundary
         env:
-          SOURCE_SHA: ${{ inputs.source_sha }}
-          SOURCE_TREE: ${{ inputs.source_tree }}
-          GPT_DIGEST: ${{ inputs.gpt_receipt_sha256 }}
+          SOURCE_SHA: ${{ needs.resolve.outputs.source_sha }}
+          SOURCE_TREE: ${{ needs.resolve.outputs.source_tree }}
+          GPT_DIGEST: ${{ needs.resolve.outputs.gpt_receipt_sha256 }}
         run: |
           set -euo pipefail
           python3 controller/release_v2.py \
             --artifact verified/.site --manifest verified/manifest.json \
             --head "${SOURCE_SHA}" --tree "${SOURCE_TREE}" --gpt-receipt-sha256 "${GPT_DIGEST}"
-          echo 'VERIFY_ONLY_PASS: no deploy job, production Environment or Cloudflare credential.'
+          echo 'CANARY_OR_VERIFY_ONLY_PASS: never a production admission; no deploy job, production Environment or Cloudflare credential.'
