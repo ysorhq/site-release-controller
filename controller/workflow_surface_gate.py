@@ -5,6 +5,8 @@ from pathlib import Path
 FIXED_PROTECTED_PATHS=(
     "controller/workflow_surface_gate.py",
     "controller/release_controller.py",
+    "controller/release_v2.py",
+    "tests/test_release_v2.py",
     "bootstrap-requests/transport-public.pem",
     "bootstrap-requests/current.json",
     "network-requests/current.json",
