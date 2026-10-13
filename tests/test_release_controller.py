@@ -1,4 +1,7 @@
 import importlib.util, json, tempfile, time, unittest
+
+# Mandatory trusted-CI import: include protected release-v2 adversarial tests.
+from tests.test_release_v2 import ReleaseV2Tests
 from pathlib import Path
 
 ROOT=Path(__file__).resolve().parents[1]

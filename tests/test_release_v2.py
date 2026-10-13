@@ -52,6 +52,8 @@ class ReleaseV2Tests(unittest.TestCase):
             "schema": 2, "source_repo": v2.SOURCE_REPO,
             "source_head": HEAD, "source_tree": TREE,
             "gpt_receipt_sha256": RECEIPT,
+            "release_mode": v2.CANARY_MODE,
+            "gpt_ci_status": v2.CANARY_GPT_STATUS,
             "artifact_sha256": v2.artifact_digest(self.site),
         }
         self.manifest.write_text(json.dumps(obj))
@@ -76,6 +78,20 @@ class ReleaseV2Tests(unittest.TestCase):
     def test_wrong_receipt(self):
         with self.assertRaisesRegex(ValueError, "binding"):
             self.verify(receipt="f" * 64)
+
+    def test_non_canary_release_admission_blocks(self):
+        obj = json.loads(self.manifest.read_text())
+        obj["release_mode"] = "RELEASE_PASS"
+        self.manifest.write_text(json.dumps(obj))
+        with self.assertRaisesRegex(ValueError, "manifest binding mismatch: release_mode"):
+            self.verify()
+
+    def test_gpt_ci_pass_claim_in_canary_blocks(self):
+        obj = json.loads(self.manifest.read_text())
+        obj["gpt_ci_status"] = "PASS"
+        self.manifest.write_text(json.dumps(obj))
+        with self.assertRaisesRegex(ValueError, "manifest binding mismatch: gpt_ci_status"):
+            self.verify()
 
     def test_artifact_tamper(self):
         (self.site / "index.html").write_text("TAMPER")

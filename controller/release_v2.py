@@ -15,6 +15,9 @@ import sys
 import xml.etree.ElementTree as ET
 
 SOURCE_REPO = "ewgenij87snwork/yevgeniy-sorokin"
+# This protocol has proved isolation ONLY. A GPT receipt digest is not proof of PASS.
+CANARY_MODE = "CANARY_VERIFY_ONLY_NO_RELEASE"
+CANARY_GPT_STATUS = "BLOCKED"
 ORIGIN = "https://yevgeniy-sorokin.pages.dev"
 ROUTES = (
     "/", "/work/", "/work/clroom/", "/work/secure-data-room/",
@@ -154,6 +157,8 @@ def verify(manifest: Path, root: Path, head: str, tree: str, cloud_digest: str):
         "schema": 2, "source_repo": SOURCE_REPO,
         "source_head": head, "source_tree": tree,
         "gpt_receipt_sha256": cloud_digest,
+        "release_mode": CANARY_MODE,
+        "gpt_ci_status": CANARY_GPT_STATUS,
     }
     for key, value in expected.items():
         if obj.get(key) != value:
@@ -183,11 +188,13 @@ def main():
                 "schema": 2, "source_repo": SOURCE_REPO,
                 "source_head": args.head, "source_tree": args.tree,
                 "gpt_receipt_sha256": args.gpt_receipt_sha256,
+                "release_mode": CANARY_MODE,
+                "gpt_ci_status": CANARY_GPT_STATUS,
                 "artifact_sha256": artifact_digest(args.artifact),
             }
             args.manifest.write_text(json.dumps(obj, sort_keys=True, indent=2) + "\n")
         result = verify(args.manifest, args.artifact, args.head, args.tree, args.gpt_receipt_sha256)
-        print("PASS:", json.dumps(result, sort_keys=True))
+        print("CANARY_ONLY_PASS (NOT RELEASE ADMISSION):", json.dumps(result, sort_keys=True))
     except Exception as exc:
         print("BLOCKED:", str(exc), file=sys.stderr)
         return 1
