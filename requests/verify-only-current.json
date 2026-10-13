@@ -7,5 +7,7 @@
   "source_tree": "b70613686239066904f94668bc8b1ef5caf2f8e4",
   "gpt_receipt_sha256": "77da25d1754f0bd91255baa0c6b66095e55aa502f2894f119a403d9a505fbb3a",
   "purpose": "Run public controller sandbox/trusted-artifact isolation rehearsal only. Receipt digest binds a real GPT cloud BLOCKED checkpoint, not a PASS; no release or deployment.",
-  "deploy": false
+  "deploy": false,
+  "rehearsal_attempt": 2,
+  "rehearsal_reason": "Retry exact same bounded canary after first run failed at App token 403 on PR metadata. Fix uses contents-read-only Git ref and fail-safe token revocation. No deployment."
 }
